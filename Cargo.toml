@@ -1,7 +1,9 @@
 [package]
 name = "ggraphics"
-version = "0.1.0"
+version = "0.0.0"
 authors = ["Simon Heath <icefoxen@gmail.com>"]
 edition = "2018"
+description = "A 2d graphics library (tentative)"
+license = "MIT"
 
 [dependencies]
