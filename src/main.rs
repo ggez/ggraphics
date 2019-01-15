@@ -8,36 +8,38 @@
     allow(dead_code, unused_extern_crates, unused_imports)
 )]
 
-extern crate env_logger;
+use env_logger;
+
 #[cfg(feature = "dx12")]
-extern crate gfx_backend_dx12 as back;
+use gfx_backend_dx12 as back;
 #[cfg(feature = "gl")]
-extern crate gfx_backend_gl as back;
+use gfx_backend_gl as back;
 #[cfg(feature = "metal")]
-extern crate gfx_backend_metal as back;
+use gfx_backend_metal as back;
 #[cfg(feature = "vulkan")]
-extern crate gfx_backend_vulkan as back;
-extern crate gfx_hal as hal;
+use gfx_backend_vulkan as back;
+use gfx_hal as hal;
 
-extern crate glsl_to_spirv;
-extern crate image;
-extern crate winit;
+use glsl_to_spirv;
+use image;
+use winit;
 
-use hal::format::{AsFormat, ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
-use hal::pass::Subpass;
-use hal::pso::{PipelineStage, ShaderStageFlags};
-use hal::queue::Submission;
-use hal::{
+use gfx_hal::format::{AsFormat, ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
+use gfx_hal::pass::Subpass;
+use gfx_hal::pso::{PipelineStage, ShaderStageFlags};
+use gfx_hal::queue::Submission;
+use gfx_hal::{
     buffer, command, format as f, image as i, memory as m, pass, pool, pso, window::Extent2D,
 };
-use hal::{Backbuffer, DescriptorPool, FrameSync, Primitive, SwapchainConfig};
-use hal::{Device, Instance, PhysicalDevice, Surface, Swapchain};
+use gfx_hal::{Backbuffer, DescriptorPool, FrameSync, Primitive, SwapchainConfig};
+use gfx_hal::{Device, Instance, PhysicalDevice, Surface, Swapchain};
 
-use std::fs;
 use std::io::{Cursor, Read};
 
-#[cfg_attr(rustfmt, rustfmt_skip)]
-const DIMS: Extent2D = Extent2D { width: 1024,height: 768 };
+const DIMS: Extent2D = Extent2D {
+    width: 1024,
+    height: 768,
+};
 
 const ENTRY_NAME: &str = "main";
 
@@ -65,33 +67,34 @@ const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
     layers: 0..1,
 };
 
-#[cfg(any(
-    feature = "vulkan",
-    feature = "dx12",
-    feature = "metal",
-    feature = "gl"
-))]
-fn main() {
-    env_logger::init();
+/// Gonna just wrap up the basic types here while I explore.
+struct WindowAndStuff {
+    window: winit::Window,
+    events_loop: winit::EventsLoop,
+    instance: Option<back::Instance>,
+    adapters: Vec<hal::adapter::Adapter<back::Backend>>,
+    surface: <back::Backend as hal::Backend>::Surface,
+}
 
-    let mut events_loop = winit::EventsLoop::new();
+/// Create the Winit window, sets up
+fn create_window_and_stuff(width: f64, height: f64) -> WindowAndStuff {
+    let events_loop = winit::EventsLoop::new();
 
     let wb = winit::WindowBuilder::new()
-        .with_dimensions(winit::dpi::LogicalSize::new(
-            DIMS.width as _,
-            DIMS.height as _,
-        )).with_title("quad".to_string());
+        .with_dimensions(winit::dpi::LogicalSize::new(width, height))
+        .with_title("ggraphics test".to_string());
+
     // instantiate backend
     #[cfg(not(feature = "gl"))]
-    let (_window, _instance, mut adapters, mut surface) = {
+    let (window, instance, adapters, surface) = {
         let window = wb.build(&events_loop).unwrap();
         let instance = back::Instance::create("gfx-rs quad", 1);
         let surface = instance.create_surface(&window);
         let adapters = instance.enumerate_adapters();
-        (window, instance, adapters, surface)
+        (window, Some(instance), adapters, surface)
     };
     #[cfg(feature = "gl")]
-    let (mut adapters, mut surface) = {
+    let (window, instance, adapters, surface) = {
         let window = {
             let builder =
                 back::config_context(back::glutin::ContextBuilder::new(), ColorFormat::SELF, None)
@@ -101,11 +104,37 @@ fn main() {
 
         let surface = back::Surface::from_window(window);
         let adapters = surface.enumerate_adapters();
-        (adapters, surface)
+        (window, None, adapters, surface)
     };
 
+    WindowAndStuff {
+        window,
+        events_loop,
+        instance,
+        adapters,
+        surface,
+    }
+}
+
+#[cfg(any(
+    feature = "vulkan",
+    feature = "dx12",
+    feature = "metal",
+    feature = "gl"
+))]
+fn main() {
+    env_logger::init();
+
+    let WindowAndStuff {
+        window: _,
+        mut events_loop,
+        instance: _,
+        mut adapters,
+        mut surface,
+    } = create_window_and_stuff(DIMS.width as f64, DIMS.height as f64);
+
     for adapter in &adapters {
-        println!("{:?}", adapter.info);
+        println!("Adapter: {:?}", adapter.info);
     }
 
     let mut adapter = adapters.remove(0);
@@ -119,7 +148,8 @@ fn main() {
 
     let mut command_pool = unsafe {
         device.create_command_pool_typed(&queue_group, pool::CommandPoolCreateFlags::empty())
-    }.expect("Can't create command pool");
+    }
+    .expect("Can't create command pool");
 
     // Setup renderpass and pipeline
     let set_layout = unsafe {
@@ -142,7 +172,8 @@ fn main() {
             ],
             &[],
         )
-    }.expect("Can't create descriptor set layout");
+    }
+    .expect("Can't create descriptor set layout");
 
     // Descriptors
     let mut desc_pool = unsafe {
@@ -159,10 +190,9 @@ fn main() {
                 },
             ],
         )
-    }.expect("Can't create descriptor pool");
-    let desc_set = unsafe {
-        desc_pool.allocate_set(&set_layout)
-    }.unwrap();
+    }
+    .expect("Can't create descriptor pool");
+    let desc_set = unsafe { desc_pool.allocate_set(&set_layout) }.unwrap();
 
     // Buffer allocations
     println!("Memory types: {:?}", memory_types);
@@ -171,13 +201,10 @@ fn main() {
     let buffer_len = QUAD.len() as u64 * buffer_stride;
 
     assert_ne!(buffer_len, 0);
-    let mut vertex_buffer = unsafe {
-        device.create_buffer(buffer_len, buffer::Usage::VERTEX)
-    }.unwrap();
+    let mut vertex_buffer =
+        unsafe { device.create_buffer(buffer_len, buffer::Usage::VERTEX) }.unwrap();
 
-    let buffer_req = unsafe {
-        device.get_buffer_requirements(&vertex_buffer)
-    };
+    let buffer_req = unsafe { device.get_buffer_requirements(&vertex_buffer) };
 
     let upload_type = memory_types
         .iter()
@@ -188,16 +215,13 @@ fn main() {
             // memory type that has a `1` (or, is allowed), and is visible to the CPU.
             buffer_req.type_mask & (1 << id) != 0
                 && mem_type.properties.contains(m::Properties::CPU_VISIBLE)
-        }).unwrap()
+        })
+        .unwrap()
         .into();
 
-    let buffer_memory = unsafe {
-        device.allocate_memory(upload_type, buffer_req.size)
-    }.unwrap();
+    let buffer_memory = unsafe { device.allocate_memory(upload_type, buffer_req.size) }.unwrap();
 
-    unsafe {
-        device.bind_buffer_memory(&buffer_memory, 0, &mut vertex_buffer)
-    }.unwrap();
+    unsafe { device.bind_buffer_memory(&buffer_memory, 0, &mut vertex_buffer) }.unwrap();
 
     // TODO: check transitions: read/write mapping and vertex buffer read
     unsafe {
@@ -221,19 +245,14 @@ fn main() {
     let row_pitch = (width * image_stride as u32 + row_alignment_mask) & !row_alignment_mask;
     let upload_size = (height * row_pitch) as u64;
 
-    let mut image_upload_buffer = unsafe {
-        device.create_buffer(upload_size, buffer::Usage::TRANSFER_SRC)
-    }.unwrap();
-    let image_mem_reqs = unsafe {
-        device.get_buffer_requirements(&image_upload_buffer)
-    };
-    let image_upload_memory = unsafe {
-        device.allocate_memory(upload_type, image_mem_reqs.size)
-    }.unwrap();
-    
-    unsafe {
-        device.bind_buffer_memory(&image_upload_memory, 0, &mut image_upload_buffer)
-    }.unwrap();
+    let mut image_upload_buffer =
+        unsafe { device.create_buffer(upload_size, buffer::Usage::TRANSFER_SRC) }.unwrap();
+    let image_mem_reqs = unsafe { device.get_buffer_requirements(&image_upload_buffer) };
+    let image_upload_memory =
+        unsafe { device.allocate_memory(upload_type, image_mem_reqs.size) }.unwrap();
+
+    unsafe { device.bind_buffer_memory(&image_upload_memory, 0, &mut image_upload_buffer) }
+        .unwrap();
 
     // copy image data into staging buffer
     unsafe {
@@ -250,19 +269,17 @@ fn main() {
     }
 
     let mut image_logo = unsafe {
-        device
-            .create_image(
-                kind,
-                1,
-                ColorFormat::SELF,
-                i::Tiling::Optimal,
-                i::Usage::TRANSFER_DST | i::Usage::SAMPLED,
-                i::ViewCapabilities::empty(),
-            )
-    }.unwrap(); // TODO: usage
-    let image_req = unsafe {
-        device.get_image_requirements(&image_logo)
-    };
+        device.create_image(
+            kind,
+            1,
+            ColorFormat::SELF,
+            i::Tiling::Optimal,
+            i::Usage::TRANSFER_DST | i::Usage::SAMPLED,
+            i::ViewCapabilities::empty(),
+        )
+    }
+    .unwrap(); // TODO: usage
+    let image_req = unsafe { device.get_image_requirements(&image_logo) };
 
     let device_type = memory_types
         .iter()
@@ -270,29 +287,27 @@ fn main() {
         .position(|(id, memory_type)| {
             image_req.type_mask & (1 << id) != 0
                 && memory_type.properties.contains(m::Properties::DEVICE_LOCAL)
-        }).unwrap()
+        })
+        .unwrap()
         .into();
-    let image_memory = unsafe {
-        device.allocate_memory(device_type, image_req.size)
-    }.unwrap();
+    let image_memory = unsafe { device.allocate_memory(device_type, image_req.size) }.unwrap();
 
-    unsafe {
-        device.bind_image_memory(&image_memory, 0, &mut image_logo)
-    }.unwrap();
+    unsafe { device.bind_image_memory(&image_memory, 0, &mut image_logo) }.unwrap();
     let image_srv = unsafe {
-        device
-            .create_image_view(
-                &image_logo,
-                i::ViewKind::D2,
-                ColorFormat::SELF,
-                Swizzle::NO,
-                COLOR_RANGE.clone(),
-            )
-    }.unwrap();
+        device.create_image_view(
+            &image_logo,
+            i::ViewKind::D2,
+            ColorFormat::SELF,
+            Swizzle::NO,
+            COLOR_RANGE.clone(),
+        )
+    }
+    .unwrap();
 
     let sampler = unsafe {
         device.create_sampler(i::SamplerInfo::new(i::Filter::Linear, i::WrapMode::Clamp))
-    }.expect("Can't create sampler");
+    }
+    .expect("Can't create sampler");
 
     unsafe {
         device.write_descriptor_sets(vec![
@@ -392,9 +407,9 @@ fn main() {
     println!("{:?}", swap_config);
     let extent = swap_config.extent.to_extent();
 
-    let (mut swap_chain, mut backbuffer) = unsafe {
-        device.create_swapchain(&mut surface, swap_config, None)
-    }.expect("Can't create swapchain");
+    let (mut swap_chain, mut backbuffer) =
+        unsafe { device.create_swapchain(&mut surface, swap_config, None) }
+            .expect("Can't create swapchain");
 
     let render_pass = {
         let attachment = pass::Attachment {
@@ -423,9 +438,8 @@ fn main() {
                 ..(i::Access::COLOR_ATTACHMENT_READ | i::Access::COLOR_ATTACHMENT_WRITE),
         };
 
-        unsafe {
-            device.create_render_pass(&[attachment], &[subpass], &[dependency])
-        }.expect("Can't create render pass")
+        unsafe { device.create_render_pass(&[attachment], &[subpass], &[dependency]) }
+            .expect("Can't create render pass")
     };
     let (mut frame_images, mut framebuffers) = match backbuffer {
         Backbuffer::Images(images) => {
@@ -439,16 +453,19 @@ fn main() {
                             format,
                             Swizzle::NO,
                             COLOR_RANGE.clone(),
-                        ).unwrap();
+                        )
+                        .unwrap();
                     (image, rtv)
-                }).collect::<Vec<_>>();
+                })
+                .collect::<Vec<_>>();
             let fbos = pairs
                 .iter()
                 .map(|&(_, ref rtv)| unsafe {
                     device
                         .create_framebuffer(&render_pass, Some(rtv), extent)
                         .unwrap()
-                }).collect();
+                })
+                .collect();
             (pairs, fbos)
         }
         Backbuffer::Framebuffer(fbo) => (Vec::new(), vec![fbo]),
@@ -459,7 +476,8 @@ fn main() {
             std::iter::once(&set_layout),
             &[(pso::ShaderStageFlags::VERTEX, 0..8)],
         )
-    }.expect("Can't create pipeline layout");
+    }
+    .expect("Can't create pipeline layout");
     let pipeline = {
         let vs_module = {
             // let glsl = fs::read_to_string("data/quad.vert").unwrap();
@@ -469,9 +487,7 @@ fn main() {
                 .bytes()
                 .map(|b| b.unwrap())
                 .collect();
-            unsafe {
-                device.create_shader_module(&spirv)
-            }.unwrap()
+            unsafe { device.create_shader_module(&spirv) }.unwrap()
         };
         let fs_module = {
             // let glsl = fs::read_to_string("quad/data/quad.frag").unwrap();
@@ -481,9 +497,7 @@ fn main() {
                 .bytes()
                 .map(|b| b.unwrap())
                 .collect();
-            unsafe {
-                device.create_shader_module(&spirv)
-            }.unwrap()
+            unsafe { device.create_shader_module(&spirv) }.unwrap()
         };
 
         let pipeline = {
@@ -550,9 +564,7 @@ fn main() {
                 },
             });
 
-            unsafe {
-                device.create_graphics_pipeline(&pipeline_desc, None)
-            }
+            unsafe { device.create_graphics_pipeline(&pipeline_desc, None) }
         };
 
         unsafe {
@@ -625,9 +637,9 @@ fn main() {
             println!("{:?}", swap_config);
             let extent = swap_config.extent.to_extent();
 
-            let (new_swap_chain, new_backbuffer) = unsafe {
-                device.create_swapchain(&mut surface, swap_config, Some(swap_chain))
-            }.expect("Can't create swapchain");
+            let (new_swap_chain, new_backbuffer) =
+                unsafe { device.create_swapchain(&mut surface, swap_config, Some(swap_chain)) }
+                    .expect("Can't create swapchain");
 
             unsafe {
                 // Clean up the old framebuffers, images and swapchain
@@ -647,22 +659,26 @@ fn main() {
                     let pairs = images
                         .into_iter()
                         .map(|image| unsafe {
-                            let rtv = device.create_image_view(
+                            let rtv = device
+                                .create_image_view(
                                     &image,
                                     i::ViewKind::D2,
                                     format,
                                     Swizzle::NO,
                                     COLOR_RANGE.clone(),
-                                ).unwrap();
+                                )
+                                .unwrap();
                             (image, rtv)
-                        }).collect::<Vec<_>>();
+                        })
+                        .collect::<Vec<_>>();
                     let fbos = pairs
                         .iter()
                         .map(|&(_, ref rtv)| unsafe {
                             device
                                 .create_framebuffer(&render_pass, Some(rtv), extent)
                                 .unwrap()
-                        }).collect();
+                        })
+                        .collect();
                     (pairs, fbos)
                 }
                 Backbuffer::Framebuffer(fbo) => (Vec::new(), vec![fbo]),

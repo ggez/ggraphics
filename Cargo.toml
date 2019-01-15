@@ -7,7 +7,7 @@ description = "A 2d graphics library (tentative)"
 license = "MIT"
 
 [features]
-default = []
+default = ["vulkan"]
 metal = ["gfx-backend-metal"]
 gl = ["gfx-backend-gl"]
 dx12 = ["gfx-backend-dx12"]

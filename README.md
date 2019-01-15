@@ -17,3 +17,14 @@ Essentially dictated by gfx-hal, which is dictated by WebRender
  * Vulkan (version?)
  * Metal (version?)
  * DirectX 11 or better
+
+# Notes and things to examine
+
+ * https://github.com/draw2d/rfcs/issues/1 and other content by that project
+ * https://raphlinus.github.io/rust/graphics/2018/10/11/2d-graphics.html
+ * https://nical.github.io/posts/rust-2d-graphics-01.html
+ * https://nical.github.io/posts/rust-2d-graphics-02.html
+ * https://github.com/Connicpu/direct2d-rs
+ * Can we use webrender?  I doubt it, but it'd be interesting to examine.  Talk to kvark
+   and nical about it.
+ * Can we make a good particle system as part of this?  It sounds fun.  :D
