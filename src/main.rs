@@ -126,9 +126,9 @@ fn main() {
     env_logger::init();
 
     let WindowAndStuff {
-        window: _,
+        window: _window,
         mut events_loop,
-        instance: _,
+        instance: _instance,
         mut adapters,
         mut surface,
     } = create_window_and_stuff(DIMS.width as f64, DIMS.height as f64);
