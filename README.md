@@ -20,6 +20,7 @@ Essentially dictated by gfx-hal, which is dictated by WebRender
 
 # Notes and things to examine
 
+ * https://github.com/omni-viral/rendy -- Amethyst's equivalent, might be better to just use that.
  * https://github.com/draw2d/rfcs/issues/1 and other content by that project
  * https://raphlinus.github.io/rust/graphics/2018/10/11/2d-graphics.html
  * https://nical.github.io/posts/rust-2d-graphics-01.html

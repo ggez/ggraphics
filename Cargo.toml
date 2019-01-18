@@ -7,6 +7,7 @@ description = "A 2d graphics library (tentative)"
 license = "MIT"
 
 [features]
+# TODO: Change the default to `gl`, try to build, file bug reports for everything different.
 default = ["vulkan"]
 metal = ["gfx-backend-metal"]
 gl = ["gfx-backend-gl"]
