@@ -1,6 +1,7 @@
 #![cfg_attr(
     not(any(
         feature = "vulkan",
+        feature = "dx11",
         feature = "dx12",
         feature = "metal",
         feature = "gl"
@@ -8,38 +9,38 @@
     allow(dead_code, unused_extern_crates, unused_imports)
 )]
 
-use env_logger;
-
+extern crate env_logger;
+#[cfg(feature = "dx11")]
+extern crate gfx_backend_dx11 as back;
 #[cfg(feature = "dx12")]
-use gfx_backend_dx12 as back;
+extern crate gfx_backend_dx12 as back;
 #[cfg(feature = "gl")]
-use gfx_backend_gl as back;
+extern crate gfx_backend_gl as back;
 #[cfg(feature = "metal")]
-use gfx_backend_metal as back;
+extern crate gfx_backend_metal as back;
 #[cfg(feature = "vulkan")]
-use gfx_backend_vulkan as back;
-use gfx_hal as hal;
+extern crate gfx_backend_vulkan as back;
+extern crate gfx_hal as hal;
 
-use glsl_to_spirv;
-use image;
-use winit;
+extern crate glsl_to_spirv;
+extern crate image;
+extern crate winit;
 
-use gfx_hal::format::{AsFormat, ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
-use gfx_hal::pass::Subpass;
-use gfx_hal::pso::{PipelineStage, ShaderStageFlags};
-use gfx_hal::queue::Submission;
-use gfx_hal::{
+use hal::format::{AsFormat, ChannelType, Rgba8Srgb as ColorFormat, Swizzle};
+use hal::pass::Subpass;
+use hal::pso::{PipelineStage, ShaderStageFlags, VertexInputRate};
+use hal::queue::Submission;
+use hal::{
     buffer, command, format as f, image as i, memory as m, pass, pool, pso, window::Extent2D,
 };
-use gfx_hal::{Backbuffer, DescriptorPool, FrameSync, Primitive, SwapchainConfig};
-use gfx_hal::{Device, Instance, PhysicalDevice, Surface, Swapchain};
+use hal::{Backbuffer, DescriptorPool, Primitive, SwapchainConfig};
+use hal::{Device, Instance, PhysicalDevice, Surface, Swapchain};
 
+use std::fs;
 use std::io::{Cursor, Read};
 
-const DIMS: Extent2D = Extent2D {
-    width: 1024,
-    height: 768,
-};
+#[cfg_attr(rustfmt, rustfmt_skip)]
+const DIMS: Extent2D = Extent2D { width: 1024,height: 768 };
 
 const ENTRY_NAME: &str = "main";
 
@@ -67,34 +68,35 @@ const COLOR_RANGE: i::SubresourceRange = i::SubresourceRange {
     layers: 0..1,
 };
 
-/// Gonna just wrap up the basic types here while I explore.
-struct WindowAndStuff {
-    window: winit::Window,
-    events_loop: winit::EventsLoop,
-    instance: Option<back::Instance>,
-    adapters: Vec<hal::adapter::Adapter<back::Backend>>,
-    surface: <back::Backend as hal::Backend>::Surface,
-}
+#[cfg(any(
+    feature = "vulkan",
+    feature = "dx11",
+    feature = "dx12",
+    feature = "metal",
+    feature = "gl"
+))]
+fn main() {
+    env_logger::init();
 
-/// Create the Winit window, sets up
-fn create_window_and_stuff(width: f64, height: f64) -> WindowAndStuff {
-    let events_loop = winit::EventsLoop::new();
+    let mut events_loop = winit::EventsLoop::new();
 
     let wb = winit::WindowBuilder::new()
-        .with_dimensions(winit::dpi::LogicalSize::new(width, height))
-        .with_title("ggraphics test".to_string());
-
+        .with_dimensions(winit::dpi::LogicalSize::new(
+            DIMS.width as _,
+            DIMS.height as _,
+        ))
+        .with_title("quad".to_string());
     // instantiate backend
     #[cfg(not(feature = "gl"))]
-    let (window, instance, adapters, surface) = {
+    let (_window, _instance, mut adapters, mut surface) = {
         let window = wb.build(&events_loop).unwrap();
         let instance = back::Instance::create("gfx-rs quad", 1);
         let surface = instance.create_surface(&window);
         let adapters = instance.enumerate_adapters();
-        (window, Some(instance), adapters, surface)
+        (window, instance, adapters, surface)
     };
     #[cfg(feature = "gl")]
-    let (window, instance, adapters, surface) = {
+    let (mut adapters, mut surface) = {
         let window = {
             let builder =
                 back::config_context(back::glutin::ContextBuilder::new(), ColorFormat::SELF, None)
@@ -104,37 +106,11 @@ fn create_window_and_stuff(width: f64, height: f64) -> WindowAndStuff {
 
         let surface = back::Surface::from_window(window);
         let adapters = surface.enumerate_adapters();
-        (window, None, adapters, surface)
+        (adapters, surface)
     };
 
-    WindowAndStuff {
-        window,
-        events_loop,
-        instance,
-        adapters,
-        surface,
-    }
-}
-
-#[cfg(any(
-    feature = "vulkan",
-    feature = "dx12",
-    feature = "metal",
-    feature = "gl"
-))]
-fn main() {
-    env_logger::init();
-
-    let WindowAndStuff {
-        window: _window,
-        mut events_loop,
-        instance: _instance,
-        mut adapters,
-        mut surface,
-    } = create_window_and_stuff(DIMS.width as f64, DIMS.height as f64);
-
     for adapter in &adapters {
-        println!("Adapter: {:?}", adapter.info);
+        println!("{:?}", adapter.info);
     }
 
     let mut adapter = adapters.remove(0);
@@ -189,6 +165,7 @@ fn main() {
                     count: 1,
                 },
             ],
+            pso::DescriptorPoolCreateFlags::empty(),
         )
     }
     .expect("Can't create descriptor pool");
@@ -240,7 +217,7 @@ fn main() {
         .to_rgba();
     let (width, height) = img.dimensions();
     let kind = i::Kind::D2(width as i::Size, height as i::Size, 1, 1);
-    let row_alignment_mask = limits.min_buffer_copy_pitch_alignment as u32 - 1;
+    let row_alignment_mask = limits.optimal_buffer_copy_pitch_alignment as u32 - 1;
     let image_stride = 4usize;
     let row_pitch = (width * image_stride as u32 + row_alignment_mask) & !row_alignment_mask;
     let upload_size = (height * row_pitch) as u64;
@@ -278,7 +255,7 @@ fn main() {
             i::ViewCapabilities::empty(),
         )
     }
-    .unwrap(); // TODO: usage
+    .unwrap();
     let image_req = unsafe { device.get_image_requirements(&image_logo) };
 
     let device_type = memory_types
@@ -326,10 +303,8 @@ fn main() {
         ]);
     }
 
-    let mut frame_semaphore = device.create_semaphore().expect("Can't create semaphore");
-    let mut frame_fence = device.create_fence(false).expect("Can't create fence"); // TODO: remove
-
     // copy buffer to texture
+    let mut copy_fence = device.create_fence(false).expect("Could not create fence");
     unsafe {
         let mut cmd_buffer = command_pool.acquire_command_buffer::<command::OneShot>();
         cmd_buffer.begin();
@@ -385,15 +360,18 @@ fn main() {
 
         cmd_buffer.finish();
 
-        queue_group.queues[0].submit_nosemaphores(Some(&cmd_buffer), Some(&mut frame_fence));
+        queue_group.queues[0].submit_nosemaphores(Some(&cmd_buffer), Some(&mut copy_fence));
 
         device
-            .wait_for_fence(&frame_fence, !0)
+            .wait_for_fence(&copy_fence, !0)
             .expect("Can't wait for fence");
     }
 
-    let (caps, formats, _present_modes, _composite_alphas) =
-        surface.compatibility(&mut adapter.physical_device);
+    unsafe {
+        device.destroy_fence(copy_fence);
+    }
+
+    let (caps, formats, _present_modes) = surface.compatibility(&mut adapter.physical_device);
     println!("formats: {:?}", formats);
     let format = formats.map_or(f::Format::Rgba8Srgb, |formats| {
         formats
@@ -471,6 +449,66 @@ fn main() {
         Backbuffer::Framebuffer(fbo) => (Vec::new(), vec![fbo]),
     };
 
+    // Define maximum number of frames we want to be able to be "in flight" (being computed
+    // simultaneously) at once
+    let frames_in_flight = 3;
+
+    // Number of image acquisition semaphores is based on the number of swapchain images, not frames in flight,
+    // plus one extra which we can guarantee is unused at any given time by swapping it out with the ones
+    // in the rest of the queue.
+    let mut image_acquire_semaphores = Vec::with_capacity(frame_images.len());
+    let mut free_acquire_semaphore = device
+        .create_semaphore()
+        .expect("Could not create semaphore");
+
+    // The number of the rest of the resources is based on the frames in flight.
+    let mut submission_complete_semaphores = Vec::with_capacity(frames_in_flight);
+    let mut submission_complete_fences = Vec::with_capacity(frames_in_flight);
+    // Note: We don't really need a different command pool per frame in such a simple demo like this,
+    // but in a more 'real' application, it's generally seen as optimal to have one command pool per
+    // thread per frame. There is a flag that lets a command pool reset individual command buffers
+    // which are created from it, but by default the whole pool (and therefore all buffers in it)
+    // must be reset at once. Furthermore, it is often the case that resetting a whole pool is actually
+    // faster and more efficient for the hardware than resetting individual command buffers, so it's
+    // usually best to just make a command pool for each set of buffers which need to be reset at the
+    // same time (each frame). In our case, each pool will only have one command buffer created from it,
+    // though.
+    let mut cmd_pools = Vec::with_capacity(frames_in_flight);
+    let mut cmd_buffers = Vec::with_capacity(frames_in_flight);
+
+    cmd_pools.push(command_pool);
+    for _ in 1..frames_in_flight {
+        unsafe {
+            cmd_pools.push(
+                device
+                    .create_command_pool_typed(&queue_group, pool::CommandPoolCreateFlags::empty())
+                    .expect("Can't create command pool"),
+            );
+        }
+    }
+
+    for _ in 0..frame_images.len() {
+        image_acquire_semaphores.push(
+            device
+                .create_semaphore()
+                .expect("Could not create semaphore"),
+        );
+    }
+
+    for i in 0..frames_in_flight {
+        submission_complete_semaphores.push(
+            device
+                .create_semaphore()
+                .expect("Could not create semaphore"),
+        );
+        submission_complete_fences.push(
+            device
+                .create_fence(true)
+                .expect("Could not create semaphore"),
+        );
+        cmd_buffers.push(cmd_pools[i].acquire_command_buffer::<command::MultiShot>());
+    }
+
     let pipeline_layout = unsafe {
         device.create_pipeline_layout(
             std::iter::once(&set_layout),
@@ -480,8 +518,7 @@ fn main() {
     .expect("Can't create pipeline layout");
     let pipeline = {
         let vs_module = {
-            // let glsl = fs::read_to_string("data/quad.vert").unwrap();
-            let glsl = include_str!("data/quad.vert");
+            let glsl = fs::read_to_string("quad/data/quad.vert").unwrap();
             let spirv: Vec<u8> = glsl_to_spirv::compile(&glsl, glsl_to_spirv::ShaderType::Vertex)
                 .unwrap()
                 .bytes()
@@ -490,8 +527,7 @@ fn main() {
             unsafe { device.create_shader_module(&spirv) }.unwrap()
         };
         let fs_module = {
-            // let glsl = fs::read_to_string("quad/data/quad.frag").unwrap();
-            let glsl = include_str!("data/quad.frag");
+            let glsl = fs::read_to_string("quad/data/quad.frag").unwrap();
             let spirv: Vec<u8> = glsl_to_spirv::compile(&glsl, glsl_to_spirv::ShaderType::Fragment)
                 .unwrap()
                 .bytes()
@@ -544,14 +580,14 @@ fn main() {
             pipeline_desc.vertex_buffers.push(pso::VertexBufferDesc {
                 binding: 0,
                 stride: std::mem::size_of::<Vertex>() as u32,
-                rate: 0,
+                rate: VertexInputRate::Vertex,
             });
 
             pipeline_desc.attributes.push(pso::AttributeDesc {
                 location: 0,
                 binding: 0,
                 element: pso::Element {
-                    format: f::Format::Rg32Float,
+                    format: f::Format::Rg32Sfloat,
                     offset: 0,
                 },
             });
@@ -559,7 +595,7 @@ fn main() {
                 location: 1,
                 binding: 0,
                 element: pso::Element {
-                    format: f::Format::Rg32Float,
+                    format: f::Format::Rg32Sfloat,
                     offset: 8,
                 },
             });
@@ -595,6 +631,7 @@ fn main() {
         width: 0,
         height: 0,
     };
+    let mut frame: u64 = 0;
     while running {
         events_loop.poll_events(|event| {
             if let winit::Event::WindowEvent { event, .. } = event {
@@ -628,7 +665,7 @@ fn main() {
         if recreate_swapchain {
             device.wait_idle().unwrap();
 
-            let (caps, formats, _present_modes, _composite_alphas) =
+            let (caps, formats, _present_modes) =
                 surface.compatibility(&mut adapter.physical_device);
             // Verify that previous format still exists so we may reuse it.
             assert!(formats.iter().any(|fs| fs.contains(&format)));
@@ -691,11 +728,11 @@ fn main() {
             recreate_swapchain = false;
         }
 
-        let frame: hal::SwapImageIndex = unsafe {
-            device.reset_fence(&frame_fence).unwrap();
-            command_pool.reset();
-            match swap_chain.acquire_image(!0, FrameSync::Semaphore(&mut frame_semaphore)) {
-                Ok(i) => i,
+        // Use guaranteed unused acquire semaphore to get the index of the next frame we will render to
+        // by using acquire_image
+        let swap_image = unsafe {
+            match swap_chain.acquire_image(!0, Some(&free_acquire_semaphore), None) {
+                Ok(i) => i as usize,
                 Err(_) => {
                     recreate_swapchain = true;
                     continue;
@@ -703,21 +740,47 @@ fn main() {
             }
         };
 
-        // Rendering
-        let mut cmd_buffer = command_pool.acquire_command_buffer::<command::OneShot>();
+        // Swap the acquire semaphore with the one previously associated with the image we are acquiring
+        core::mem::swap(
+            &mut free_acquire_semaphore,
+            &mut image_acquire_semaphores[swap_image],
+        );
+
+        // Compute index into our resource ring buffers based on the frame number
+        // and number of frames in flight. Pay close attention to where this index is needed
+        // versus when the swapchain image index we got from acquire_image is needed.
+        let frame_idx = frame as usize % frames_in_flight;
+
+        // Wait for the fence of the previous submission of this frame and reset it; ensures we are
+        // submitting only up to maximum number of frames_in_flight if we are submitting faster than
+        // the gpu can keep up with. This would also guarantee that any resources which need to be
+        // updated with a CPU->GPU data copy are not in use by the GPU, so we can perform those updates.
+        // In this case there are none to be done, however.
         unsafe {
-            cmd_buffer.begin();
+            device
+                .wait_for_fence(&submission_complete_fences[frame_idx], !0)
+                .expect("Failed to wait for fence");
+            device
+                .reset_fence(&submission_complete_fences[frame_idx])
+                .expect("Failed to reset fence");
+            cmd_pools[frame_idx].reset();
+        }
+
+        // Rendering
+        let cmd_buffer = &mut cmd_buffers[frame_idx];
+        unsafe {
+            cmd_buffer.begin(false);
 
             cmd_buffer.set_viewports(0, &[viewport.clone()]);
             cmd_buffer.set_scissors(0, &[viewport.rect]);
             cmd_buffer.bind_graphics_pipeline(&pipeline);
             cmd_buffer.bind_vertex_buffers(0, Some((&vertex_buffer, 0)));
-            cmd_buffer.bind_graphics_descriptor_sets(&pipeline_layout, 0, Some(&desc_set), &[]); //TODO
+            cmd_buffer.bind_graphics_descriptor_sets(&pipeline_layout, 0, Some(&desc_set), &[]);
 
             {
                 let mut encoder = cmd_buffer.begin_render_pass_inline(
                     &render_pass,
-                    &framebuffers[frame as usize],
+                    &framebuffers[swap_image],
                     viewport.rect,
                     &[command::ClearValue::Color(command::ClearColor::Float([
                         0.8, 0.8, 0.8, 1.0,
@@ -729,27 +792,31 @@ fn main() {
             cmd_buffer.finish();
 
             let submission = Submission {
-                command_buffers: Some(&cmd_buffer),
-                wait_semaphores: Some((&frame_semaphore, PipelineStage::BOTTOM_OF_PIPE)),
-                signal_semaphores: &[],
+                command_buffers: Some(&*cmd_buffer),
+                wait_semaphores: Some((
+                    &image_acquire_semaphores[swap_image],
+                    PipelineStage::COLOR_ATTACHMENT_OUTPUT,
+                )),
+                signal_semaphores: Some(&submission_complete_semaphores[frame_idx]),
             };
-            queue_group.queues[0].submit(submission, Some(&mut frame_fence));
-
-            // TODO: replace with semaphore
-            device.wait_for_fence(&frame_fence, !0).unwrap();
-            command_pool.free(Some(cmd_buffer));
+            queue_group.queues[0].submit(submission, Some(&submission_complete_fences[frame_idx]));
 
             // present frame
-            if let Err(_) = swap_chain.present_nosemaphores(&mut queue_group.queues[0], frame) {
+            if let Err(_) = swap_chain.present(
+                &mut queue_group.queues[0],
+                swap_image as hal::SwapImageIndex,
+                Some(&submission_complete_semaphores[frame_idx]),
+            ) {
                 recreate_swapchain = true;
             }
         }
+        // Increment our frame
+        frame += 1;
     }
 
     // cleanup!
     device.wait_idle().unwrap();
     unsafe {
-        device.destroy_command_pool(command_pool.into_raw());
         device.destroy_descriptor_pool(desc_pool);
         device.destroy_descriptor_set_layout(set_layout);
 
@@ -758,8 +825,19 @@ fn main() {
         device.destroy_image(image_logo);
         device.destroy_image_view(image_srv);
         device.destroy_sampler(sampler);
-        device.destroy_fence(frame_fence);
-        device.destroy_semaphore(frame_semaphore);
+        device.destroy_semaphore(free_acquire_semaphore);
+        for p in cmd_pools {
+            device.destroy_command_pool(p.into_raw());
+        }
+        for s in image_acquire_semaphores {
+            device.destroy_semaphore(s);
+        }
+        for s in submission_complete_semaphores {
+            device.destroy_semaphore(s);
+        }
+        for f in submission_complete_fences {
+            device.destroy_fence(f);
+        }
         device.destroy_render_pass(render_pass);
         device.free_memory(buffer_memory);
         device.free_memory(image_memory);
@@ -779,6 +857,7 @@ fn main() {
 
 #[cfg(not(any(
     feature = "vulkan",
+    feature = "dx11",
     feature = "dx12",
     feature = "metal",
     feature = "gl"

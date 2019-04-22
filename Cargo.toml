@@ -16,26 +16,31 @@ vulkan = ["gfx-backend-vulkan"]
 
 [dependencies]
 env_logger = "0.6"
-image = "0.20"
+image = "0.21"
 log = "0.4"
 winit = "0.18"
 glsl-to-spirv = "0.1.4"
-gfx-hal = "0.1"
+#gfx-hal = "0.1"
+gfx-hal = {git = "https://github.com/gfx-rs/gfx.git", branch = "master"}
 gfx-backend-empty = "0.1"
 
 [dependencies.gfx-backend-gl]
-version = "0.1"
 features = ["glutin"]
 optional = true
+git = "https://github.com/gfx-rs/gfx.git"
+branch = "master"
 
 [dependencies.gfx-backend-vulkan]
-version = "0.1"
 optional = true
+git = "https://github.com/gfx-rs/gfx.git"
+branch = "master"
 
 [target.'cfg(any(target_os = "macos", all(target_os = "ios", target_arch = "aarch64")))'.dependencies.gfx-backend-metal]
-version = "0.1"
 optional = true
+git = "https://github.com/gfx-rs/gfx.git"
+branch = "master"
 
 [target.'cfg(windows)'.dependencies.gfx-backend-dx12]
-version = "0.1"
 optional = true
+git = "https://github.com/gfx-rs/gfx.git"
+branch = "master"
