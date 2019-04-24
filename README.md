@@ -132,9 +132,15 @@ Actual features/enhancements we want:
  * Simpler/better handling of the various icky edge cases.
  * Faster (or even automatic) sprite batches.
  * We MIGHT be able to fit the info in DrawCall into a push constant?
+ * We want to be able to expose the guts of the underlying graphics system to the user.
 
 Compromises that we make:
 
  * All textures have the same color format, layout etc.
  * Don't bother with depth buffer, layers, etc
  * We never really have more than one window or Device at once
+ * For complicated things, we expose the guts of the underlying graphics system to the user.
+
+Questions to ask:
+
+ * Can we have custom vertex types that get fed into shaders?
