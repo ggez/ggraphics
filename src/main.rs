@@ -305,7 +305,7 @@ fn run(
     factory: &mut Factory<Backend>,
     families: &mut Families<Backend>,
     mut graph: Graph<Backend, ()>,
-) -> Result<(), ()> {
+) {
     let started = std::time::Instant::now();
 
     std::thread::spawn(move || {
@@ -340,7 +340,6 @@ fn run(
     );
 
     graph.dispose(factory, &mut ());
-    Ok(())
 }
 
 #[cfg(any(feature = "dx12", feature = "metal", feature = "vulkan"))]
@@ -385,7 +384,7 @@ fn main() {
         .build(&mut factory, &mut families, &mut ())
         .unwrap();
 
-    run(&mut event_loop, &mut factory, &mut families, graph).unwrap();
+    run(&mut event_loop, &mut factory, &mut families, graph);
 }
 
 #[cfg(not(any(feature = "dx12", feature = "metal", feature = "vulkan")))]
