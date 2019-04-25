@@ -10,11 +10,14 @@ license = "MIT"
 # TODO: Change the default to `gl`, try to build, file bug reports for everything different.
 default = ["vulkan"]
 vulkan = ["rendy/vulkan"]
+dx12 = ["rendy/dx12"]
+metal = ["rendy/metal"]
 
 [dependencies]
-env_logger = "0.6"
 image = "0.21"
 log = "0.4"
 winit = "0.18"
 #rendy = "0.1"
-rendy = {git="https://github.com/amethyst/rendy.git", rev="5c35277f9080e0ea8b73096f62ddb399cf73820a"}
+rendy = {git="https://github.com/amethyst/rendy.git", rev="5c35277f9080e0ea8b73096f62ddb399cf73820a", features=["texture-image"]}
+lazy_static = "1"
+failure = "0.1"
