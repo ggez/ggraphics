@@ -9,38 +9,12 @@ license = "MIT"
 [features]
 # TODO: Change the default to `gl`, try to build, file bug reports for everything different.
 default = ["vulkan"]
-metal = ["gfx-backend-metal"]
-gl = ["gfx-backend-gl"]
-dx12 = ["gfx-backend-dx12"]
-vulkan = ["gfx-backend-vulkan"]
+vulkan = ["rendy/vulkan"]
 
 [dependencies]
 env_logger = "0.6"
 image = "0.21"
 log = "0.4"
 winit = "0.18"
-glsl-to-spirv = "0.1.4"
-#gfx-hal = "0.1"
-gfx-hal = {git = "https://github.com/gfx-rs/gfx.git", branch = "master"}
-gfx-backend-empty = "0.1"
-
-[dependencies.gfx-backend-gl]
-features = ["glutin"]
-optional = true
-git = "https://github.com/gfx-rs/gfx.git"
-branch = "master"
-
-[dependencies.gfx-backend-vulkan]
-optional = true
-git = "https://github.com/gfx-rs/gfx.git"
-branch = "master"
-
-[target.'cfg(any(target_os = "macos", all(target_os = "ios", target_arch = "aarch64")))'.dependencies.gfx-backend-metal]
-optional = true
-git = "https://github.com/gfx-rs/gfx.git"
-branch = "master"
-
-[target.'cfg(windows)'.dependencies.gfx-backend-dx12]
-optional = true
-git = "https://github.com/gfx-rs/gfx.git"
-branch = "master"
+#rendy = "0.1"
+rendy = {git="https://github.com/amethyst/rendy.git", rev="5c35277f9080e0ea8b73096f62ddb399cf73820a"}
