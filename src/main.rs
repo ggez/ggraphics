@@ -487,12 +487,12 @@ fn main() {
         .collect();
      */
     let verts: Vec<[f32;3]> = vec![
-        [0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [1.0, 1.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [1.0, 1.0, 0.0],
-        [0.1, 0.0, 0.0],
+        [0.0, 0.0, 0.5],
+        [0.0, 1.0, 0.5],
+        [1.0, 1.0, 0.5],
+        [0.0, 0.0, 0.5],
+        [1.0, 1.0, 0.5],
+        [0.1, 0.0, 0.5],
     ];
     // TODO: Fewer verts, more indices
     let indices = rendy::mesh::Indices::from( vec![
@@ -550,15 +550,14 @@ fn main() {
             let elapsed = checkpoint.elapsed();
 
             if aux.scene.objects.len() < MAX_OBJECTS {
-                aux.scene.objects.push({
-                    let z = rz.sample(&mut rng);
-                    //Transform3::identity()
-                    Transform3::create_translation(
-                        rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                        rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                        -z,
-                    )
-                })
+                    //let z = rz.sample(&mut rng);
+                    let trans = Transform3::create_translation(
+                        rxy.sample(&mut rng) * 100.0,
+                        rxy.sample(&mut rng) * 100.0,
+                        0.0,
+                    );
+                println!("Creating scene object at {:?}", trans);
+                aux.scene.objects.push(trans)
             }
 
             if should_close
