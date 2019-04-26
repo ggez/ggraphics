@@ -23,6 +23,9 @@ layout(std140, set = 0, binding = 0) uniform Args {
     int pad3;
     Light lights[32];
 };
+layout(set = 0, binding = 1) uniform texture2D colormap;
+layout(set = 0, binding = 2) uniform sampler colorsampler;
+
 
 void main() {
     float acc = 0.0;
@@ -39,6 +42,6 @@ void main() {
         // acc += lights[i].intencity;
     }
     acc = min(acc, 1.0);
-    color = frag_color * vec4(acc, acc, acc, 1.0);
-    // color = frag_color;
+    //color = frag_color * vec4(acc, acc, acc, 1.0);
+    color = texture(sampler2D(colormap, colorsampler), uv);
 }

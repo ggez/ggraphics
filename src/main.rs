@@ -31,7 +31,7 @@ use {
     gfx_hal::PhysicalDevice as _,
     rendy::{
         command::{DrawIndexedCommand, QueueId, RenderPassEncoder},
-        factory::{Config, Factory},
+        factory::{Config, Factory, ImageState},
         graph::{
             present::PresentNode, render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage,
         },
@@ -41,6 +41,7 @@ use {
         mesh::{AsVertex, Mesh, PosColorNorm, Transform},
         resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle},
         shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo},
+        texture::Texture,
     },
 };
 
@@ -144,6 +145,7 @@ struct MeshRenderPipelineDesc;
 
 #[derive(Debug)]
 struct MeshRenderPipeline<B: gfx_hal::Backend> {
+    texture: Texture<B>,
     buffer: Escape<Buffer<B>>,
     sets: Vec<Escape<DescriptorSet<B>>>,
 }
@@ -154,16 +156,38 @@ where
 {
     type Pipeline = MeshRenderPipeline<B>;
 
+    
+    fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
+        None
+    }
+
     fn layout(&self) -> Layout {
         Layout {
             sets: vec![SetLayout {
-                bindings: vec![gfx_hal::pso::DescriptorSetLayoutBinding {
-                    binding: 0,
-                    ty: gfx_hal::pso::DescriptorType::UniformBuffer,
-                    count: 1,
-                    stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
-                    immutable_samplers: false,
-                }],
+                bindings: vec![
+                    gfx_hal::pso::DescriptorSetLayoutBinding {
+                        binding: 0,
+                        ty: gfx_hal::pso::DescriptorType::UniformBuffer,
+                        count: 1,
+                        stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
+                        immutable_samplers: false,
+                    },
+                    // ADDED
+                    gfx_hal::pso::DescriptorSetLayoutBinding {
+                        binding: 1,
+                        ty: gfx_hal::pso::DescriptorType::SampledImage,
+                        count: 1,
+                        stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+                        immutable_samplers: false,
+                    },
+                    gfx_hal::pso::DescriptorSetLayoutBinding {
+                        binding: 2,
+                        ty: gfx_hal::pso::DescriptorType::Sampler,
+                        count: 1,
+                        stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+                        immutable_samplers: false,
+                    },
+                ],
             }],
             push_constants: Vec::new(),
         }
@@ -217,7 +241,7 @@ where
         self,
         _ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
-        _queue: QueueId,
+        queue: QueueId,
         aux: &Aux<B>,
         buffers: Vec<NodeBuffer>,
         images: Vec<NodeImage>,
@@ -241,6 +265,28 @@ where
             )
             .unwrap();
 
+        // This is how we can load an image and create a new texture.
+        let image_bytes = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/data/logo.png"
+        ));
+
+        let texture_builder =
+            rendy::texture::image::load_from_image(image_bytes, Default::default())?;
+
+        let texture = texture_builder
+            .build(
+                ImageState {
+                    queue,
+                    stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
+                    access: gfx_hal::image::Access::SHADER_READ,
+                    layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+                },
+                factory,
+            )
+            .unwrap();
+
+
         let mut sets = Vec::new();
         for index in 0..frames {
             unsafe {
@@ -257,11 +303,28 @@ where
                             ..Some(uniform_offset(index, align) + UNIFORM_SIZE),
                     )),
                 }));
+                // ADDED
+                factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                    set: set.raw(),
+                    binding: 1,
+                    array_offset: 0,
+                    descriptors: vec![gfx_hal::pso::Descriptor::Image(
+                        texture.view().raw(),
+                        gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+                    )],
+                }));
+                factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                    set: set.raw(),
+                    binding: 2,
+                    array_offset: 0,
+                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(texture.sampler().raw())],
+                }));
+
                 sets.push(set);
             }
         }
 
-        Ok(MeshRenderPipeline { buffer, sets })
+        Ok(MeshRenderPipeline { texture, buffer, sets })
     }
 }
 
