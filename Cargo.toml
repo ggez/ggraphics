@@ -21,3 +21,8 @@ winit = "0.18"
 rendy = {git="https://github.com/amethyst/rendy.git", rev="5c35277f9080e0ea8b73096f62ddb399cf73820a", features=["texture-image"]}
 lazy_static = "1"
 failure = "0.1"
+euclid = "0.19"
+
+
+palette = "0.4"
+rand = "0.6"

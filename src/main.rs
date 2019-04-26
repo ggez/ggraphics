@@ -3,38 +3,59 @@ TODO: Make backend select-able either based on platform,
 or at runtime?
 TODO: Rendy has no gl backend yet.
 TODO: Make shaderc less inconvenient?
+
+Okay, so the first step is going to be rendering multiple things with the same
+geometry and texture using instanced drawing.
+
+Next step is to render things with different textures.
+
+Last step is to render things with different textures and
+different geometry.
+
+Last+1 step might be to make rendering quads a more efficient special case,
+for example by reifying the geometry in the vertex shader a la the Rendy 
+quads example.
  */
 
 //!
-//! A simple sprite example.
-//! This examples shows how to render a sprite on a white background.
+//! The mighty triangle example.
+//! This examples shows colord triangle on white background.
+//! Nothing fancy. Just prove that `rendy` works.
 //!
 
 #![cfg_attr(
     not(any(feature = "dx12", feature = "metal", feature = "vulkan")),
     allow(unused)
 )]
-use failure;
-
-use rendy::hal as gfx_hal;
 use {
-    gfx_hal::Device as _,
+
     rendy::{
-        command::{Families, QueueId, RenderPassEncoder},
-        factory::{Config, Factory, ImageState},
+        command::{DrawIndexedCommand, QueueId, RenderPassEncoder},
+        factory::{Config, Factory},
         graph::{
-            present::PresentNode, render::*, Graph, GraphBuilder, GraphContext, NodeBuffer,
-            NodeImage,
+            present::PresentNode, render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage,
         },
+        hal,
+        hal::Device as _,
         memory::Dynamic,
-        mesh::{AsVertex, PosTex},
+        mesh::{AsVertex, Mesh, PosColorNorm, Transform},
         resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle},
-        shader::{Shader, ShaderKind, SourceLanguage, StaticShaderInfo},
-        texture::Texture,
+        shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo},
     },
 };
 
-use winit::{EventsLoop, WindowBuilder};
+use std::{cmp::min, mem::size_of, time};
+
+use rand::distributions::{Distribution, Uniform};
+
+use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
+use rendy::hal::PhysicalDevice as _;
+use euclid;
+
+type Vector3 = euclid::Vector3D<f32>;
+type Transform3 = euclid::Transform3D<f32>;
+//type Vector2 = euclid::Vector2D<f32>;
+//type Point2 = euclid::Point2D<f32>;
 
 #[cfg(feature = "dx12")]
 type Backend = rendy::dx12::Backend;
@@ -46,76 +67,149 @@ type Backend = rendy::metal::Backend;
 type Backend = rendy::vulkan::Backend;
 
 lazy_static::lazy_static! {
-    static ref VERTEX: StaticShaderInfo = StaticShaderInfo::new(
+    static ref VERTEX: SpirvShader = StaticShaderInfo::new(
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
         ShaderKind::Vertex,
         SourceLanguage::GLSL,
         "main",
-    );
+    ).precompile().unwrap();
 
-    static ref FRAGMENT: StaticShaderInfo = StaticShaderInfo::new(
+    static ref FRAGMENT: SpirvShader = StaticShaderInfo::new(
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
         ShaderKind::Fragment,
         SourceLanguage::GLSL,
         "main",
-    );
+    ).precompile().unwrap();
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C, align(16))]
+struct Light {
+    pos: Vector3,
+    pad: f32,
+    intencity: f32,
+}
+
+#[derive(Clone, Copy)]
+#[repr(C, align(16))]
+struct UniformArgs {
+    proj: Transform3,
+    view: Transform3,
+    lights_count: i32,
+    pad: [i32; 3],
+    lights: [Light; MAX_LIGHTS],
+}
+
+#[derive(Debug)]
+struct Camera {
+    view: Transform3,
+    proj: Transform3,
+}
+
+#[derive(Debug)]
+struct Scene<B: hal::Backend> {
+    camera: Camera,
+    object_mesh: Option<Mesh<B>>,
+    objects: Vec<Transform3>,
+    lights: Vec<Light>,
+}
+
+#[derive(Debug)]
+struct Aux<B: hal::Backend> {
+    frames: usize,
+    align: u64,
+    scene: Scene<B>,
+}
+
+const MAX_LIGHTS: usize = 32;
+const MAX_OBJECTS: usize = 10_000;
+const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
+const TRANSFORMS_SIZE: u64 = size_of::<Transform>() as u64 * MAX_OBJECTS as u64;
+const INDIRECT_SIZE: u64 = size_of::<DrawIndexedCommand>() as u64;
+
+const fn buffer_frame_size(align: u64) -> u64 {
+    ((UNIFORM_SIZE + TRANSFORMS_SIZE + INDIRECT_SIZE - 1) / align + 1) * align
+}
+
+const fn uniform_offset(index: usize, align: u64) -> u64 {
+    buffer_frame_size(align) * index as u64
+}
+
+const fn transforms_offset(index: usize, align: u64) -> u64 {
+    uniform_offset(index, align) + UNIFORM_SIZE
+}
+
+const fn indirect_offset(index: usize, align: u64) -> u64 {
+    transforms_offset(index, align) + TRANSFORMS_SIZE
 }
 
 #[derive(Debug, Default)]
-struct SpriteGraphicsPipelineDesc;
+struct MeshRenderPipelineDesc;
 
 #[derive(Debug)]
-struct SpriteGraphicsPipeline<B: gfx_hal::Backend> {
-    texture: Texture<B>,
-    vbuf: Escape<Buffer<B>>,
-    descriptor_set: Escape<DescriptorSet<B>>,
+struct MeshRenderPipeline<B: hal::Backend> {
+    buffer: Escape<Buffer<B>>,
+    sets: Vec<Escape<DescriptorSet<B>>>,
 }
 
-impl<B, T> SimpleGraphicsPipelineDesc<B, T> for SpriteGraphicsPipelineDesc
+impl<B> SimpleGraphicsPipelineDesc<B, Aux<B>> for MeshRenderPipelineDesc
 where
-    B: gfx_hal::Backend,
-    T: ?Sized,
+    B: hal::Backend,
 {
-    type Pipeline = SpriteGraphicsPipeline<B>;
+    type Pipeline = MeshRenderPipeline<B>;
 
-    fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
-        None
+    fn layout(&self) -> Layout {
+        Layout {
+            sets: vec![SetLayout {
+                bindings: vec![hal::pso::DescriptorSetLayoutBinding {
+                    binding: 0,
+                    ty: hal::pso::DescriptorType::UniformBuffer,
+                    count: 1,
+                    stage_flags: hal::pso::ShaderStageFlags::GRAPHICS,
+                    immutable_samplers: false,
+                }],
+            }],
+            push_constants: Vec::new(),
+        }
     }
 
     fn vertices(
         &self,
     ) -> Vec<(
-        Vec<gfx_hal::pso::Element<gfx_hal::format::Format>>,
-        gfx_hal::pso::ElemStride,
-        gfx_hal::pso::InstanceRate,
+        Vec<hal::pso::Element<hal::format::Format>>,
+        hal::pso::ElemStride,
+        hal::pso::InstanceRate,
     )> {
-        vec![PosTex::VERTEX.gfx_vertex_input_desc(0)]
+        vec![
+            PosColorNorm::VERTEX.gfx_vertex_input_desc(0),
+            Transform::VERTEX.gfx_vertex_input_desc(1),
+        ]
     }
 
-    fn load_shader_set<'b>(
+    fn load_shader_set<'a>(
         &self,
-        storage: &'b mut Vec<B::ShaderModule>,
+        storage: &'a mut Vec<B::ShaderModule>,
         factory: &mut Factory<B>,
-        _aux: &T,
-    ) -> gfx_hal::pso::GraphicsShaderSet<'b, B> {
+        _aux: &Aux<B>,
+    ) -> hal::pso::GraphicsShaderSet<'a, B> {
         storage.clear();
 
-        log::trace!("Load shader module '{:#?}'", *VERTEX);
+        log::trace!("Load shader module VERTEX");
         storage.push(unsafe { VERTEX.module(factory).unwrap() });
 
-        log::trace!("Load shader module '{:#?}'", *FRAGMENT);
+        log::trace!("Load shader module FRAGMENT");
         storage.push(unsafe { FRAGMENT.module(factory).unwrap() });
 
-        gfx_hal::pso::GraphicsShaderSet {
-            vertex: gfx_hal::pso::EntryPoint {
+        hal::pso::GraphicsShaderSet {
+            vertex: hal::pso::EntryPoint {
                 entry: "main",
                 module: &storage[0],
-                specialization: gfx_hal::pso::Specialization::default(),
+                specialization: hal::pso::Specialization::default(),
             },
-            fragment: Some(gfx_hal::pso::EntryPoint {
+            fragment: Some(hal::pso::EntryPoint {
                 entry: "main",
                 module: &storage[1],
-                specialization: gfx_hal::pso::Specialization::default(),
+                specialization: hal::pso::Specialization::default(),
             }),
             hull: None,
             domain: None,
@@ -123,159 +217,129 @@ where
         }
     }
 
-    fn layout(&self) -> Layout {
-        Layout {
-            sets: vec![SetLayout {
-                bindings: vec![
-                    gfx_hal::pso::DescriptorSetLayoutBinding {
-                        binding: 0,
-                        ty: gfx_hal::pso::DescriptorType::SampledImage,
-                        count: 1,
-                        stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
-                        immutable_samplers: false,
-                    },
-                    gfx_hal::pso::DescriptorSetLayoutBinding {
-                        binding: 1,
-                        ty: gfx_hal::pso::DescriptorType::Sampler,
-                        count: 1,
-                        stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
-                        immutable_samplers: false,
-                    },
-                ],
-            }],
-            push_constants: Vec::new(),
-        }
-    }
-
-    fn build<'b>(
+    fn build<'a>(
         self,
         _ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
-        queue: QueueId,
-        _aux: &T,
+        _queue: QueueId,
+        aux: &Aux<B>,
         buffers: Vec<NodeBuffer>,
         images: Vec<NodeImage>,
         set_layouts: &[Handle<DescriptorSetLayout<B>>],
-    ) -> Result<SpriteGraphicsPipeline<B>, failure::Error> {
+    ) -> Result<MeshRenderPipeline<B>, failure::Error> {
         assert!(buffers.is_empty());
         assert!(images.is_empty());
         assert_eq!(set_layouts.len(), 1);
 
-        // This is how we can load an image and create a new texture.
-        let image_bytes = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/data/logo.png"
-        ));
+        let (frames, align) = (aux.frames, aux.align);
 
-        let texture_builder =
-            rendy::texture::image::load_from_image(image_bytes, Default::default())
-            .unwrap();
-
-        let texture = texture_builder
-            .build(
-                ImageState {
-                    queue,
-                    stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
-                    access: gfx_hal::image::Access::SHADER_READ,
-                    layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
-                },
-                factory,
-            )
-            .unwrap();
-
-        let descriptor_set = factory
-            .create_descriptor_set(set_layouts[0].clone())
-            .unwrap();
-
-        unsafe {
-            factory.device().write_descriptor_sets(vec![
-                gfx_hal::pso::DescriptorSetWrite {
-                    set: descriptor_set.raw(),
-                    binding: 0,
-                    array_offset: 0,
-                    descriptors: vec![gfx_hal::pso::Descriptor::Image(
-                        texture.view().raw(),
-                        gfx_hal::image::Layout::ShaderReadOnlyOptimal,
-                    )],
-                },
-                gfx_hal::pso::DescriptorSetWrite {
-                    set: descriptor_set.raw(),
-                    binding: 1,
-                    array_offset: 0,
-                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(texture.sampler().raw())],
-                },
-            ]);
-        }
-
-        let mut vbuf = factory
+        let buffer = factory
             .create_buffer(
                 BufferInfo {
-                    size: PosTex::VERTEX.stride as u64 * 6,
-                    usage: gfx_hal::buffer::Usage::VERTEX,
+                    size: buffer_frame_size(align) * frames as u64,
+                    usage: hal::buffer::Usage::UNIFORM
+                        | hal::buffer::Usage::INDIRECT
+                        | hal::buffer::Usage::VERTEX,
                 },
                 Dynamic,
             )
             .unwrap();
 
-        unsafe {
-            // Fresh buffer.
-            factory
-                .upload_visible_buffer(
-                    &mut vbuf,
-                    0,
-                    &[
-                        PosTex {
-                            position: [-0.5, 0.33, 0.0].into(),
-                            tex_coord: [0.0, 1.0].into(),
-                        },
-                        PosTex {
-                            position: [0.5, 0.33, 0.0].into(),
-                            tex_coord: [1.0, 1.0].into(),
-                        },
-                        PosTex {
-                            position: [0.5, -0.33, 0.0].into(),
-                            tex_coord: [1.0, 0.0].into(),
-                        },
-                        PosTex {
-                            position: [-0.5, 0.33, 0.0].into(),
-                            tex_coord: [0.0, 1.0].into(),
-                        },
-                        PosTex {
-                            position: [0.5, -0.33, 0.0].into(),
-                            tex_coord: [1.0, 0.0].into(),
-                        },
-                        PosTex {
-                            position: [-0.5, -0.33, 0.0].into(),
-                            tex_coord: [0.0, 0.0].into(),
-                        },
-                    ],
-                )
-                .unwrap();
+        let mut sets = Vec::new();
+        for index in 0..frames {
+            unsafe {
+                let set = factory
+                    .create_descriptor_set(set_layouts[0].clone())
+                    .unwrap();
+                factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
+                    set: set.raw(),
+                    binding: 0,
+                    array_offset: 0,
+                    descriptors: Some(hal::pso::Descriptor::Buffer(
+                        buffer.raw(),
+                        Some(uniform_offset(index, align))
+                            ..Some(uniform_offset(index, align) + UNIFORM_SIZE),
+                    )),
+                }));
+                sets.push(set);
+            }
         }
 
-        Ok(SpriteGraphicsPipeline {
-            texture,
-            vbuf,
-            descriptor_set,
-        })
+        Ok(MeshRenderPipeline { buffer, sets })
     }
 }
 
-impl<B, T> SimpleGraphicsPipeline<B, T> for SpriteGraphicsPipeline<B>
+impl<B> SimpleGraphicsPipeline<B, Aux<B>> for MeshRenderPipeline<B>
 where
-    B: gfx_hal::Backend,
-    T: ?Sized,
+    B: hal::Backend,
 {
-    type Desc = SpriteGraphicsPipelineDesc;
+    type Desc = MeshRenderPipelineDesc;
 
     fn prepare(
         &mut self,
-        _factory: &Factory<B>,
+        factory: &Factory<B>,
         _queue: QueueId,
         _set_layouts: &[Handle<DescriptorSetLayout<B>>],
-        _index: usize,
-        _aux: &T,
+        index: usize,
+        aux: &Aux<B>,
     ) -> PrepareResult {
+        let (scene, align) = (&aux.scene, aux.align);
+
+        unsafe {
+            factory
+                .upload_visible_buffer(
+                    &mut self.buffer,
+                    uniform_offset(index, align),
+                    &[UniformArgs {
+                        pad: [0, 0, 0],
+                        //proj: scene.camera.proj.to_homogeneous(),
+                        proj: scene.camera.proj,
+                        //view: scene.camera.view.inverse().to_homogeneous(),
+                        view: scene.camera.view.inverse().unwrap(),
+                        lights_count: scene.lights.len() as i32,
+                        lights: {
+                            let mut array = [Light {
+                                pad: 0.0,
+                                pos: Vector3::new(0.0, 0.0, 0.0),
+                                intencity: 0.0,
+                            }; MAX_LIGHTS];
+                            let count = min(scene.lights.len(), 32);
+                            array[..count].copy_from_slice(&scene.lights[..count]);
+                            array
+                        },
+                    }],
+                )
+                .unwrap()
+        };
+
+        unsafe {
+            factory
+                .upload_visible_buffer(
+                    &mut self.buffer,
+                    indirect_offset(index, align),
+                    &[DrawIndexedCommand {
+                        index_count: scene.object_mesh.as_ref().unwrap().len(),
+                        instance_count: scene.objects.len() as u32,
+                        first_index: 0,
+                        vertex_offset: 0,
+                        first_instance: 0,
+                    }],
+                )
+                .unwrap()
+        };
+
+        if !scene.objects.is_empty() {
+            unsafe {
+                factory
+                    .upload_visible_buffer(
+                        &mut self.buffer,
+                        transforms_offset(index, align),
+                        &scene.objects[..],
+                    )
+                    .unwrap()
+            };
+        }
+
         PrepareResult::DrawReuse
     }
 
@@ -283,63 +347,35 @@ where
         &mut self,
         layout: &B::PipelineLayout,
         mut encoder: RenderPassEncoder<'_, B>,
-        _index: usize,
-        _aux: &T,
+        index: usize,
+        aux: &Aux<B>,
     ) {
         encoder.bind_graphics_descriptor_sets(
             layout,
             0,
-            std::iter::once(self.descriptor_set.raw()),
-            std::iter::empty::<u32>(),
+            Some(self.sets[index].raw()),
+            std::iter::empty(),
         );
-        encoder.bind_vertex_buffers(0, Some((self.vbuf.raw(), 0)));
-        encoder.draw(0..6, 0..1);
+        assert!(aux
+            .scene
+            .object_mesh
+            .as_ref()
+            .unwrap()
+            .bind(&[PosColorNorm::VERTEX], &mut encoder)
+            .is_ok());
+        encoder.bind_vertex_buffers(
+            1,
+            std::iter::once((self.buffer.raw(), transforms_offset(index, aux.align))),
+        );
+        encoder.draw_indexed_indirect(
+            self.buffer.raw(),
+            indirect_offset(index, aux.align),
+            1,
+            INDIRECT_SIZE as u32,
+        );
     }
 
-    fn dispose(self, _factory: &mut Factory<B>, _aux: &T) {}
-}
-
-#[cfg(any(feature = "dx12", feature = "metal", feature = "vulkan"))]
-fn run(
-    event_loop: &mut EventsLoop,
-    factory: &mut Factory<Backend>,
-    families: &mut Families<Backend>,
-    mut graph: Graph<Backend, ()>,
-) {
-    let started = std::time::Instant::now();
-
-    std::thread::spawn(move || {
-        while started.elapsed() < std::time::Duration::new(30, 0) {
-            std::thread::sleep(std::time::Duration::new(1, 0));
-        }
-
-        std::process::abort();
-    });
-
-    let mut frames = 0u64..;
-    let mut elapsed = started.elapsed();
-
-    for _ in &mut frames {
-        factory.maintain(families);
-        event_loop.poll_events(|_| ());
-        graph.run(factory, families, &mut ());
-
-        elapsed = started.elapsed();
-        if elapsed >= std::time::Duration::new(5, 0) {
-            break;
-        }
-    }
-
-    let elapsed_ns = elapsed.as_secs() * 1_000_000_000 + elapsed.subsec_nanos() as u64;
-
-    log::info!(
-        "Elapsed: {:?}. Frames: {}. FPS: {}",
-        elapsed,
-        frames.start,
-        frames.start * 1_000_000_000 / elapsed_ns
-    );
-
-    graph.dispose(factory, &mut ());
+    fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
 }
 
 #[cfg(any(feature = "dx12", feature = "metal", feature = "vulkan"))]
@@ -359,32 +395,191 @@ fn main() {
     event_loop.poll_events(|_| ());
 
     let surface = factory.create_surface(window.into());
+    let aspect = surface.aspect();
 
-    let mut graph_builder = GraphBuilder::<Backend, ()>::new();
+    let mut graph_builder = GraphBuilder::<Backend, Aux<Backend>>::new();
 
     let color = graph_builder.create_image(
         surface.kind(),
         1,
         factory.get_surface_format(&surface),
-        Some(gfx_hal::command::ClearValue::Color(
+        Some(hal::command::ClearValue::Color(
             [1.0, 1.0, 1.0, 1.0].into(),
         )),
     );
 
+    let depth = graph_builder.create_image(
+        surface.kind(),
+        1,
+        hal::format::Format::D16Unorm,
+        Some(hal::command::ClearValue::DepthStencil(
+            hal::command::ClearDepthStencil(1.0, 0),
+        )),
+    );
+
     let pass = graph_builder.add_node(
-        SpriteGraphicsPipeline::builder()
+        MeshRenderPipeline::builder()
             .into_subpass()
             .with_color(color)
+            .with_depth_stencil(depth)
             .into_pass(),
     );
 
-    graph_builder.add_node(PresentNode::builder(&factory, surface, color).with_dependency(pass));
+    let present_builder = PresentNode::builder(&factory, surface, color).with_dependency(pass);
 
-    let graph = graph_builder
-        .build(&mut factory, &mut families, &mut ())
+    let frames = present_builder.image_count();
+
+    graph_builder.add_node(present_builder);
+
+    let scene = Scene {
+        camera: Camera {
+            proj: Transform3::ortho(-100.0, 100.0, -100.0, 100.0, 0.0, 1.0),
+//                nalgebra::Perspective3::new(aspect, 3.1415 / 4.0, 1.0, 200.0),
+                view: Transform3::identity(),
+                //* nalgebra::Translation3::new(0.0, 0.0, 10.0),
+        },
+        object_mesh: None,
+        objects: vec![],
+        lights: vec![
+            Light {
+                pad: 0.0,
+                pos: Vector3::new(0.0, 0.0, 0.0),
+                intencity: 10.0,
+            },
+            Light {
+                pad: 0.0,
+                pos: Vector3::new(0.0, 20.0, -20.0),
+                intencity: 140.0,
+            },
+            Light {
+                pad: 0.0,
+                pos: Vector3::new(-20.0, 0.0, -60.0),
+                intencity: 100.0,
+            },
+            Light {
+                pad: 0.0,
+                pos: Vector3::new(20.0, -30.0, -100.0),
+                intencity: 160.0,
+            },
+        ],
+    };
+
+    let mut aux = Aux {
+        frames: frames as _,
+        align: factory
+            .physical()
+            .limits()
+            .min_uniform_buffer_offset_alignment,
+        scene,
+    };
+
+    log::info!("{:#?}", aux.scene);
+
+    let mut graph = graph_builder
+        .with_frames_in_flight(frames)
+        .build(&mut factory, &mut families, &aux)
         .unwrap();
 
-    run(&mut event_loop, &mut factory, &mut families, graph);
+    //let icosphere = genmesh::generators::IcoSphere::subdivide(4);
+    /*
+    let indices: Vec<_> = genmesh::Vertices::vertices(icosphere.indexed_polygon_iter())
+        .map(|i| i as u32)
+        .collect();
+     */
+    let verts: Vec<[f32;3]> = vec![
+        [0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 0.0],
+        [0.1, 0.0, 0.0],
+    ];
+    // TODO: Fewer verts, more indices
+    let indices = rendy::mesh::Indices::from( vec![
+        0u32, 1, 2, 3, 4, 5
+        ]);
+    let vertices: Vec<_> = verts
+        .into_iter()
+        .map(|v| PosColorNorm {
+            position: rendy::mesh::Position::from(v),
+            color: [
+                (v[0] + 1.0) / 2.0,
+                (v[1] + 1.0) / 2.0,
+                (v[2] + 1.0) / 2.0,
+                1.0,
+            ]
+                .into(),
+            // TODO: Double-check this; z goes into screen, right?
+            normal: rendy::mesh::Normal::from([0.0, 0.0, -1.0])
+        })
+        .collect();
+
+    aux.scene.object_mesh = Some(
+        Mesh::<Backend>::builder()
+            .with_indices(indices)
+            .with_vertices(&vertices[..])
+            .build(graph.node_queue(pass), &factory)
+            .unwrap(),
+    );
+
+    let started = time::Instant::now();
+
+    let mut frames = 0u64..;
+    let mut rng = rand::thread_rng();
+    let rxy = Uniform::new(-1.0, 1.0);
+    let rz = Uniform::new(0.0, 185.0);
+
+    let mut fpss = Vec::new();
+    let mut checkpoint = started;
+    let mut should_close = false;
+
+    while !should_close && aux.scene.objects.len() < MAX_OBJECTS {
+        let start = frames.start;
+        let from = aux.scene.objects.len();
+        for _ in &mut frames {
+            factory.maintain(&mut families);
+            event_loop.poll_events(|event| match event {
+                Event::WindowEvent {
+                    event: WindowEvent::CloseRequested,
+                    ..
+                } => should_close = true,
+                _ => (),
+            });
+            graph.run(&mut factory, &mut families, &aux);
+
+            let elapsed = checkpoint.elapsed();
+
+            if aux.scene.objects.len() < MAX_OBJECTS {
+                aux.scene.objects.push({
+                    let z = rz.sample(&mut rng);
+                    //Transform3::identity()
+                    Transform3::create_translation(
+                        rxy.sample(&mut rng) * (z / 2.0 + 4.0),
+                        rxy.sample(&mut rng) * (z / 2.0 + 4.0),
+                        -z,
+                    )
+                })
+            }
+
+            if should_close
+                || elapsed > std::time::Duration::new(5, 0)
+                || aux.scene.objects.len() == MAX_OBJECTS
+            {
+                let frames = frames.start - start;
+                let nanos = elapsed.as_secs() * 1_000_000_000 + elapsed.subsec_nanos() as u64;
+                fpss.push((
+                    frames * 1_000_000_000 / nanos,
+                    from..aux.scene.objects.len(),
+                ));
+                checkpoint += elapsed;
+                break;
+            }
+        }
+    }
+
+    log::info!("FPS: {:#?}", fpss);
+
+    graph.dispose(&mut factory, &aux);
 }
 
 #[cfg(not(any(feature = "dx12", feature = "metal", feature = "vulkan")))]
