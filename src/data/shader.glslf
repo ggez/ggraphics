@@ -6,6 +6,7 @@ layout(early_fragment_tests) in;
 layout(location = 0) in vec4 in_pos;
 layout(location = 1) in vec3 frag_norm;
 layout(location = 2) in vec4 frag_color;
+layout(location = 3) in vec4 uv;
 layout(location = 0) out vec4 color;
 
 struct Light {
@@ -43,5 +44,5 @@ void main() {
     }
     acc = min(acc, 1.0);
     //color = frag_color * vec4(acc, acc, acc, 1.0);
-    color = texture(sampler2D(colormap, colorsampler), uv);
+    color = texture(sampler2D(colormap, colorsampler), uv.xy);
 }
