@@ -108,3 +108,91 @@ resources seem to be connected to a particular `Pipeline` instance?
 That's not really how ggez does it, any resource may be visible from
 any pipeline.  That may be more awkward since certain resources seem
 to be specific to particular pipeline's or queues.  Hmmmm.
+
+
+
+Okay, so we're going to be drawing with
+rendy::command::DrawIndexedCommand.  This deals with two buffers, one
+of instance data and one of geometry data, though only indirectly
+through descriptors of some kind.  This takes three offset+length's
+into those buffers: uniform, vertex, and instance starts.  Great, that
+lets us have our conceptual Geometry and DrawParam types, and globals
+like projection and such go into a global uniform buffer.  So far so
+good.
+
+We then have different descriptor sets or something like that for each
+Geometry, keep track of which one we're currently using, and only
+switch when we change Geometry?  100% sure how that all fits together
+yet; Rendy does some of the stuff for you but it's kinda hidden.  But
+that model basically gives us automatic sprite batching, as well as
+automatic batching of whatever other geometry we happen to end up
+using, so we can give sprites an arbitrary Mesh and it will be just as
+fast as drawing quads.  Sauce.
+
+We ARE going to have to do memory management of instance data, it
+looks like.  This should be fairly simple since we just have to fill a
+buffer up to a point, and expand the buffer when necessary.
+Contracting the buffer if it gets small MIGHT be useful.  Or you can
+provide a hint to the renderer or whatever someday; for now just
+expand it if it runs out and don't sweat it otherwise.  Rendy probably
+can help with this but idk how yet.
+
+Okay, how do we fit textures in with instanced drawing?  Looks easy
+actually; a texture and sampler get put into the `SetLayout`.  Then
+changing those is basically the same as changing the geometry.  Looks
+like rendy mostly just handles samplers for us?  Make sure.  Either
+way, since the sampler settings we are actually interested in are
+discrete, there's realistically a fairly limited number of samplers
+that may get used.  We can can maybe just create all the ones possible
+ahead of time, if necessary.  Samplers and textures are passed to the
+shader in uniforms, basically like anything else.
+
+Need to wrap my mind around how instanced vs. vertex/pixel data works
+in shaders more.  I'm just shaky on which is specified how.
+
+Blending is controlled by SimpleGraphicsPipelineDesc::colors(). I'm
+not sure exactly where render targets happen yet but it appears to be
+in the Graph, which is several levels above the Pipeline; it looks as
+though it's something like Graph's contain Pass's which contain
+SubPass's which contain Pipeline's.  Each `RenderPassNodeBuilder` just
+takes subpass's, and a single subpass can be trivially turned into a
+pass containing just that.  It looks like the `SubpassBuilder` takes
+color and depth buffers (as inputs or outputs???) as well as some
+dependency info that the `Graph` uses to order its various `Node`s
+appropriately(?).  
+
+ooooooh, color and depth buffers are created by
+`GraphBuilder::create_image()` and then handed to a subpass with
+`with_color()` and such.  That subpass is created from your
+`FooPipeline` that impl's `SimpleGraphicsPipeline`  Then the
+`PresentNode` connects the color buffer up to the `surface` that
+actually gets presented.
+
+example from `meshes`:
+
+```rust
+    let mut graph_builder = GraphBuilder::<Backend, Aux<Backend>>::new();
+
+    let color = graph_builder.create_image(
+        surface.kind(),
+        1,
+        factory.get_surface_format(&surface),
+        Some(gfx_hal::command::ClearValue::Color(
+            [1.0, 1.0, 1.0, 1.0].into(),
+        )),
+    );
+
+    let pass = graph_builder.add_node(
+        MeshRenderPipeline::builder()
+            .into_subpass()
+            .with_color(color)
+            .into_pass(),
+    );
+
+    let present_builder = PresentNode::builder(&factory, surface, color).with_dependency(pass);
+
+    graph_builder.add_node(present_builder);
+```
+
+This code is kinda hacked up, don't trust it to be 100% correct.  Also
+just trivially omitting a depth buffer causes a crash somewhere, so.
