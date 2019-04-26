@@ -1,30 +1,25 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 
-layout(location = 0) in vec4 color;
-layout(location = 0) out vec4 frag_color;
+layout(location = 0) in vec3 pos;
+layout(location = 1) in vec4 color;
+layout(location = 2) in vec3 norm;
+// vec4[4] is used instead of mat4 due to spirv-cross bug for dx12 backend
+layout(location = 3) in vec4 model[4]; // per-instance.
 
-layout(std430, set = 0, binding = 0) buffer _ {
-    vec4 posvel[];
-} posvelbuff;
-
-vec2 vertices[6] = {
-    vec2(0.00, 0.00),
-    vec2(0.00, 0.01),
-    vec2(0.01, 0.01),
-    vec2(0.00, 0.00),
-    vec2(0.01, 0.01),
-    vec2(0.01, 0.00),
+layout(set = 0, binding = 0) uniform Args {
+    mat4 proj;
+    mat4 view;
 };
 
+layout(location = 0) out vec4 frag_pos;
+layout(location = 1) out vec3 frag_norm;
+layout(location = 2) out vec4 frag_color;
+
 void main() {
-    vec4 posvel = posvelbuff.posvel[gl_InstanceIndex];
-    vec2 pos = posvel.rg;
-    vec2 vertex = vertices[gl_VertexIndex];
-
-    vec2 v = ((vertex + pos / 1.01) * 2.0) - vec2(1.0, 1.0);
-    v.y = -v.y;
-
-    frag_color = vec4(color.rgb, 1.0);
-    gl_Position = vec4(v, 0.0, 1.0);
+    mat4 model_mat = mat4(model[0], model[1], model[2], model[3]);
+    frag_color = color;
+    frag_norm = normalize((vec4(norm, 1.0) * model_mat).xyz);
+    frag_pos = model_mat * vec4(pos, 1.0);
+    gl_Position = proj * view * frag_pos;
 }
