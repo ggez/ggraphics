@@ -22,6 +22,6 @@ void main() {
     frag_color = color;
     frag_norm = normalize((vec4(norm, 1.0) * model_mat).xyz);
     frag_pos = model_mat * vec4(pos, 1.0);
-    uv = vec4(pos, 0);
+    uv = vec4(pos, 0) / 10.0;
     gl_Position = proj * view * frag_pos;
 }
