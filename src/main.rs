@@ -158,11 +158,11 @@ where
     type Pipeline = MeshRenderPipeline<B>;
 
 
-    /*
+
     fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
         None
     }
-    */
+
 
     fn layout(&self) -> Layout {
         Layout {
@@ -481,7 +481,7 @@ fn main() {
         MeshRenderPipeline::builder()
             .into_subpass()
             .with_color(color)
-            .with_depth_stencil(depth)
+            // .with_depth_stencil(depth)
             .into_pass(),
     );
 
