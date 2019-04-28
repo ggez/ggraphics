@@ -196,3 +196,11 @@ example from `meshes`:
 
 This code is kinda hacked up, don't trust it to be 100% correct.  Also
 just trivially omitting a depth buffer causes a crash somewhere, so.
+
+
+# Outstanding questions
+
+Depth buffer???
+
+Selectable backends
+

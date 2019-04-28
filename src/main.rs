@@ -85,22 +85,12 @@ lazy_static::lazy_static! {
     ).precompile().unwrap();
 }
 
-#[derive(Clone, Copy, Debug)]
-#[repr(C, align(16))]
-struct Light {
-    pos: Vector3,
-    pad: f32,
-    intencity: f32,
-}
 
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 struct UniformArgs {
     proj: Transform3,
     view: Transform3,
-    lights_count: i32,
-    pad: [i32; 3],
-    lights: [Light; MAX_LIGHTS],
 }
 
 #[derive(Debug)]
@@ -114,7 +104,6 @@ struct Scene<B: gfx_hal::Backend> {
     camera: Camera,
     object_mesh: Option<Mesh<B>>,
     objects: Vec<Transform3>,
-    lights: Vec<Light>,
 }
 
 #[derive(Debug)]
@@ -162,12 +151,9 @@ where
 {
     type Pipeline = MeshRenderPipeline<B>;
 
-
-    /*
     fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
         None
     }
-    */
 
     fn layout(&self) -> Layout {
         Layout {
@@ -358,20 +344,8 @@ where
                     &mut self.buffer,
                     uniform_offset(index, align),
                     &[UniformArgs {
-                        pad: [0, 0, 0],
                         proj: scene.camera.proj,
                         view: scene.camera.view.inverse().unwrap(),
-                        lights_count: scene.lights.len() as i32,
-                        lights: {
-                            let mut array = [Light {
-                                pad: 0.0,
-                                pos: Vector3::new(0.0, 0.0, 0.0),
-                                intencity: 0.0,
-                            }; MAX_LIGHTS];
-                            let count = min(scene.lights.len(), 32);
-                            array[..count].copy_from_slice(&scene.lights[..count]);
-                            array
-                        },
                     }],
                 )
                 .unwrap()
@@ -473,20 +447,20 @@ fn main() {
         )),
     );
 
-    let depth = graph_builder.create_image(
-        surface.kind(),
-        1,
-        gfx_hal::format::Format::D16Unorm,
-        Some(gfx_hal::command::ClearValue::DepthStencil(
-            gfx_hal::command::ClearDepthStencil(1.0, 0),
-        )),
-    );
+    // let depth = graph_builder.create_image(
+    //     surface.kind(),
+    //     1,
+    //     gfx_hal::format::Format::D16Unorm,
+    //     Some(gfx_hal::command::ClearValue::DepthStencil(
+    //         gfx_hal::command::ClearDepthStencil(1.0, 0),
+    //     )),
+    // );
 
     let pass = graph_builder.add_node(
         MeshRenderPipeline::builder()
             .into_subpass()
             .with_color(color)
-            .with_depth_stencil(depth)
+            // .with_depth_stencil(depth)
             .into_pass(),
     );
 
@@ -503,28 +477,6 @@ fn main() {
         },
         object_mesh: None,
         objects: vec![],
-        lights: vec![
-            Light {
-                pad: 0.0,
-                pos: Vector3::new(0.0, 0.0, 0.0),
-                intencity: 10.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: Vector3::new(0.0, 20.0, -20.0),
-                intencity: 140.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: Vector3::new(-20.0, 0.0, -60.0),
-                intencity: 100.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: Vector3::new(20.0, -30.0, -100.0),
-                intencity: 160.0,
-            },
-        ],
     };
 
     let mut aux = Aux {
