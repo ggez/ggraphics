@@ -13,7 +13,7 @@ Last step is to render things with different textures and
 different geometry.
 
 Last+1 step might be to make rendering quads a more efficient special case,
-for example by reifying the geometry in the vertex shader a la the Rendy 
+for example by reifying the geometry in the vertex shader a la the Rendy
 quads example.
  */
 
@@ -52,13 +52,14 @@ use rand::distributions::{Distribution, Uniform};
 
 use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
-#[cfg(feature = "dx12")]
-type Backend = rendy::dx12::Backend;
-
-#[cfg(feature = "metal")]
+// TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
+// Perhaps.
+// For now though, this is okay if not great.
+// It WOULD be quite nice to be able to play with OpenGL and DX12 backends.
+#[cfg(target_os = "macos")]
 type Backend = rendy::metal::Backend;
 
-#[cfg(feature = "vulkan")]
+#[cfg(not(target_os = "macos"))]
 type Backend = rendy::vulkan::Backend;
 
 lazy_static::lazy_static! {
@@ -156,7 +157,7 @@ where
 {
     type Pipeline = MeshRenderPipeline<B>;
 
-    
+
     /*
     fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
         None
