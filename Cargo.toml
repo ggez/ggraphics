@@ -22,7 +22,6 @@ rendy = {git="https://github.com/amethyst/rendy.git", rev="5c35277f9080e0ea8b730
 lazy_static = "1"
 failure = "0.1"
 euclid = "0.19"
-nalgebra = "0.18"
 
 
 palette = "0.4"

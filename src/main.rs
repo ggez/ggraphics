@@ -52,6 +52,11 @@ use rand::distributions::{Distribution, Uniform};
 
 use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
+use euclid;
+
+type Vector3 = euclid::Vector3D<f32>;
+type Transform3 = euclid::Transform3D<f32>;
+
 // TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
 // Perhaps.
 // For now though, this is okay if not great.
@@ -83,7 +88,7 @@ lazy_static::lazy_static! {
 #[derive(Clone, Copy, Debug)]
 #[repr(C, align(16))]
 struct Light {
-    pos: nalgebra::Vector3<f32>,
+    pos: Vector3,
     pad: f32,
     intencity: f32,
 }
@@ -91,8 +96,8 @@ struct Light {
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 struct UniformArgs {
-    proj: nalgebra::Matrix4<f32>,
-    view: nalgebra::Matrix4<f32>,
+    proj: Transform3,
+    view: Transform3,
     lights_count: i32,
     pad: [i32; 3],
     lights: [Light; MAX_LIGHTS],
@@ -100,15 +105,15 @@ struct UniformArgs {
 
 #[derive(Debug)]
 struct Camera {
-    view: nalgebra::Projective3<f32>,
-    proj: nalgebra::Matrix4<f32>,
+    view: Transform3,
+    proj: Transform3,
 }
 
 #[derive(Debug)]
 struct Scene<B: gfx_hal::Backend> {
     camera: Camera,
     object_mesh: Option<Mesh<B>>,
-    objects: Vec<nalgebra::Transform3<f32>>,
+    objects: Vec<Transform3>,
     lights: Vec<Light>,
 }
 
@@ -355,12 +360,12 @@ where
                     &[UniformArgs {
                         pad: [0, 0, 0],
                         proj: scene.camera.proj,
-                        view: scene.camera.view.inverse().to_homogeneous(),
+                        view: scene.camera.view.inverse().unwrap(),
                         lights_count: scene.lights.len() as i32,
                         lights: {
                             let mut array = [Light {
                                 pad: 0.0,
-                                pos: nalgebra::Vector3::new(0.0, 0.0, 0.0),
+                                pos: Vector3::new(0.0, 0.0, 0.0),
                                 intencity: 0.0,
                             }; MAX_LIGHTS];
                             let count = min(scene.lights.len(), 32);
@@ -493,31 +498,30 @@ fn main() {
 
     let scene = Scene {
         camera: Camera {
-            // proj: nalgebra::Matrix4::new_perspective(aspect, 3.1415 / 4.0, 1.0, 200.0),
-            proj: nalgebra::Matrix4::new_orthographic(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
-            view: nalgebra::Projective3::identity() * nalgebra::Translation3::new(0.0, 0.0, 10.0),
+            proj: Transform3::ortho(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
+            view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
         object_mesh: None,
         objects: vec![],
         lights: vec![
             Light {
                 pad: 0.0,
-                pos: nalgebra::Vector3::new(0.0, 0.0, 0.0),
+                pos: Vector3::new(0.0, 0.0, 0.0),
                 intencity: 10.0,
             },
             Light {
                 pad: 0.0,
-                pos: nalgebra::Vector3::new(0.0, 20.0, -20.0),
+                pos: Vector3::new(0.0, 20.0, -20.0),
                 intencity: 140.0,
             },
             Light {
                 pad: 0.0,
-                pos: nalgebra::Vector3::new(-20.0, 0.0, -60.0),
+                pos: Vector3::new(-20.0, 0.0, -60.0),
                 intencity: 100.0,
             },
             Light {
                 pad: 0.0,
-                pos: nalgebra::Vector3::new(20.0, -30.0, -100.0),
+                pos: Vector3::new(20.0, -30.0, -100.0),
                 intencity: 160.0,
             },
         ],
@@ -632,13 +636,11 @@ fn main() {
 
             if aux.scene.objects.len() < MAX_OBJECTS {
                     let z = rz.sample(&mut rng);
-                    let trans = nalgebra::Transform3::identity()
-                        * nalgebra::Translation3::new(
+                    let trans = Transform3::create_translation(
                             rxy.sample(&mut rng) * (z / 2.0 + 4.0),
                             rxy.sample(&mut rng) * (z / 2.0 + 4.0),
                             -z,
                         );
-                        println!("Creating scene object at {:?}", trans);
                 aux.scene.objects.push(trans);
             }
 
