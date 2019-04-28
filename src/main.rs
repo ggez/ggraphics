@@ -54,8 +54,13 @@ use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
 use euclid;
 
+
+type Point2 = euclid::Vector2D<f32>;
+type Vector2 = euclid::Vector2D<f32>;
 type Vector3 = euclid::Vector3D<f32>;
 type Transform3 = euclid::Transform3D<f32>;
+type Color = [f32;4];
+type Rect = euclid::Rect<f32>;
 
 // TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
 // Perhaps.
@@ -85,6 +90,16 @@ lazy_static::lazy_static! {
     ).precompile().unwrap();
 }
 
+#[derive(Clone, Copy, Debug)]
+#[repr(C, align(16))]
+pub struct DrawParam {
+    pub src: Rect,
+    pub dest: Point2,
+    pub rotation: f32,
+    pub scale: Vector2,
+    pub offset: Point2,
+    pub color: Color,
+}
 
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
@@ -113,7 +128,6 @@ struct Aux<B: gfx_hal::Backend> {
     scene: Scene<B>,
 }
 
-const MAX_LIGHTS: usize = 32;
 const MAX_OBJECTS: usize = 10_000;
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
 const TRANSFORMS_SIZE: u64 = size_of::<Transform>() as u64 * MAX_OBJECTS as u64;
@@ -495,35 +509,7 @@ fn main() {
         .build(&mut factory, &mut families, &aux)
         .unwrap();
 
-/*
-    let icosphere = genmesh::generators::IcoSphere::subdivide(4);
-    let indices: Vec<_> = genmesh::Vertices::vertices(icosphere.indexed_polygon_iter())
-        .map(|i| i as u32)
-        .collect();
-    let vertices: Vec<_> = icosphere
-        .shared_vertex_iter()
-        .map(|v| PosColorNorm {
-            position: v.pos.into(),
-            color: [
-                (v.pos.x + 1.0) / 2.0,
-                (v.pos.y + 1.0) / 2.0,
-                (v.pos.z + 1.0) / 2.0,
-                1.0,
-            ]
-            .into(),
-            normal: v.normal.into(),
-        })
-        .collect();
-
-    aux.scene.object_mesh = Some(
-        Mesh::<Backend>::builder()
-            .with_indices(&indices[..])
-            .with_vertices(&vertices[..])
-            .build(graph.node_queue(pass), &factory)
-            .unwrap(),
-    );
-    */
-        let verts: Vec<[f32;3]> = vec![
+    let verts: Vec<[f32;3]> = vec![
         [0.0, 0.0, 0.5],
         [0.0, 10.0, 0.5],
         [10.0, 10.0, 0.5],
