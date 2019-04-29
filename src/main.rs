@@ -141,13 +141,20 @@ impl<B> Scene<B> where B: gfx_hal::Backend {
         let rxy = Uniform::new(-1.0, 1.0);
         let rz = Uniform::new(0.0, 185.0);
 
-            if self.objects.len() < MAX_OBJECTS {
+        if self.objects.len() < MAX_OBJECTS {
+            /*
                 let z = rz.sample(rng);
                 let transform = Transform3::create_translation(
                     rxy.sample(rng) * (z / 2.0 + 4.0),
                     rxy.sample(rng) * (z / 2.0 + 4.0),
                     -z,
                 );
+             */
+            let transform = Transform3::create_translation(
+                rxy.sample(rng) * 1000.0,
+                rxy.sample(rng) * 1000.0,
+                -10.0,
+            );
                 let src = Rect::from(
                     euclid::Size2D::new(1.0, 1.0)
                 );
@@ -578,10 +585,12 @@ fn main() {
     let object_mesh = make_quad_mesh(queue_id, &mut factory);
 
     let sampler_info = SamplerInfo::new(Filter::Linear, WrapMode::Clamp);
+    let width = window_size.width as f32;
+    let height = window_size.height as f32;
     let scene = Scene {
         // TODO: Make view and proj separate?  Maybe.  We should only need one.
         camera: Camera {
-            proj: Transform3::ortho(0.0, window_size.width as f32, window_size.height as f32, 0.0, 1.0, 200.0),
+            proj: Transform3::ortho(-width, width, -height, height, 1.0, 200.0),
             view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
         objects: vec![],
