@@ -448,13 +448,11 @@ where
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
 }
 
-fn make_texture<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Texture<B>
+/// This is how we can load an image and create a new texture.
+fn make_texture<B>(queue_id: QueueId, factory: &mut Factory<B>, image_bytes: &[u8]) -> Texture<B>
 where
     B: gfx_hal::Backend,
 {
-    // This is how we can load an image and create a new texture.
-    let image_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/logo.png"));
-
     let texture_builder = rendy::texture::image::load_from_image(image_bytes, Default::default())
         .expect("Could not load texture?");
 
@@ -520,6 +518,7 @@ fn main() {
         .with_title("Rendy example")
         .build(&event_loop)
         .unwrap();
+    let window_size = window.get_inner_size().unwrap().to_physical(window.get_hidpi_factor());
 
     event_loop.poll_events(|_| ());
 
@@ -571,14 +570,18 @@ fn main() {
         index: 0,
     };
 
-    let texture = make_texture(queue_id, &mut factory);
+    let rendy_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/rendy_logo.png"));
+    let gfx_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/gfx_logo.png"));
+    
+    let texture = make_texture(queue_id, &mut factory, rendy_bytes);
+    let _texture2 = make_texture(queue_id, &mut factory, gfx_bytes);
     let object_mesh = make_quad_mesh(queue_id, &mut factory);
 
     let sampler_info = SamplerInfo::new(Filter::Linear, WrapMode::Clamp);
     let scene = Scene {
         // TODO: Make view and proj separate?  Maybe.  We should only need one.
         camera: Camera {
-            proj: Transform3::ortho(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
+            proj: Transform3::ortho(0.0, window_size.width as f32, window_size.height as f32, 0.0, 1.0, 200.0),
             view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
         objects: vec![],
