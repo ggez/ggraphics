@@ -34,13 +34,13 @@ use {
         hal as gfx_hal,
         memory::Dynamic,
         mesh::{AsVertex, Mesh, PosColorNorm, Transform},
-        resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle, ViewKind, SamplerInfo},
+        resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle, Image, ImageView, ViewKind, SamplerInfo, Filter, WrapMode},
         shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo},
         texture::Texture,
     },
 };
 
-use std::{cmp::min, mem::size_of, time};
+use std::{mem::size_of, time};
 
 
 use rand::distributions::{Distribution, Uniform};
@@ -115,10 +115,10 @@ struct Scene<B: gfx_hal::Backend> {
     object_mesh: Option<Mesh<B>>,
     objects: Vec<Transform3>,
     texture: Texture<B>,
-    /*
-    sampler_info: B::Sampler,
-    view_kind: B::ImageView,
-*/
+    
+    /// We just need the actual config for the sampler 'cause
+    /// Rendy's `Factory` can manage a sampler cache itself.
+    sampler_info: SamplerInfo,
 }
 
 #[derive(Debug)]
@@ -272,7 +272,7 @@ where
             )
             .unwrap();
 
-
+        let sampler = factory.get_sampler(aux.scene.sampler_info.clone())?;
         let mut sets = Vec::new();
         for index in 0..frames {
             unsafe {
@@ -303,7 +303,7 @@ where
                     set: set.raw(),
                     binding: 2,
                     array_offset: 0,
-                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(aux.scene.texture.sampler().raw())],
+                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
                 }));
 
                 sets.push(set);
@@ -387,13 +387,14 @@ where
             Some(self.sets[index].raw()),
             std::iter::empty(),
         );
-        assert!(aux
+        aux
             .scene
             .object_mesh
             .as_ref()
             .unwrap()
             .bind(&[PosColorNorm::VERTEX], &mut encoder)
-            .is_ok());
+            .expect("Could not bind mesh?");
+
         encoder.bind_vertex_buffers(
             1,
             std::iter::once((self.buffer.raw(), transforms_offset(index, aux.align))),
@@ -407,6 +408,32 @@ where
     }
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
+}
+
+fn make_texture<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Texture<B>
+where B: gfx_hal::Backend {
+    // This is how we can load an image and create a new texture.
+    let image_bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/data/logo.png"
+    ));
+
+    let texture_builder =
+        rendy::texture::image::load_from_image(image_bytes, Default::default())
+        .expect("Could not load texture?");
+
+    let texture = texture_builder
+        .build(
+            ImageState {
+                queue: queue_id,
+                stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
+                access: gfx_hal::image::Access::SHADER_READ,
+                layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+            },
+            factory,
+        )
+            .unwrap();
+        texture
 }
 
 #[cfg(any(feature = "dx12", feature = "metal", feature = "vulkan"))]
@@ -470,12 +497,14 @@ fn main() {
         index: 0,
     };
 
+    /*
     // This is how we can load an image and create a new texture.
     let image_bytes = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/data/logo.png"
     ));
 
+   
     let texture_builder =
         rendy::texture::image::load_from_image(image_bytes, Default::default())
         .expect("Could not load texture?");
@@ -491,7 +520,11 @@ fn main() {
             &mut factory,
         )
         .unwrap();
+*/
 
+    let texture = make_texture(queue_id, &mut factory);
+
+    let sampler_info = SamplerInfo::new(Filter::Linear, WrapMode::Clamp);
     let scene = Scene {
         camera: Camera {
             proj: Transform3::ortho(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
@@ -500,6 +533,8 @@ fn main() {
         object_mesh: None,
         objects: vec![],
         texture: texture,
+
+        sampler_info,
     };
 
 
