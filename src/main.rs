@@ -34,8 +34,8 @@ use {
         memory::Dynamic,
         mesh::{AsVertex, Mesh, PosColorNorm, Transform},
         resource::{
-            Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, Image,
-            ImageView, SamplerInfo, ViewKind, WrapMode,
+            Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle,
+            SamplerInfo, WrapMode,
         },
         shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo},
         texture::Texture,
@@ -137,6 +137,33 @@ struct Scene<B: gfx_hal::Backend> {
     sampler_info: SamplerInfo,
 }
 
+impl<B> Scene<B> where B: gfx_hal::Backend {
+    fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng) {
+        let rxy = Uniform::new(-1.0, 1.0);
+        let rz = Uniform::new(0.0, 185.0);
+
+            if self.objects.len() < MAX_OBJECTS {
+                let z = rz.sample(rng);
+                let transform = Transform3::create_translation(
+                    rxy.sample(rng) * (z / 2.0 + 4.0),
+                    rxy.sample(rng) * (z / 2.0 + 4.0),
+                    -z,
+                );
+                let src = Rect::from(
+                    euclid::Size2D::new(1.0, 1.0)
+                );
+                let color = [1.0, 0.0, 1.0, 1.0];
+                let instance = InstanceData {
+                    transform,
+                    src,
+                    color,
+                };
+                self.objects.push(instance);
+            }
+
+    }
+}
+
 #[derive(Debug)]
 struct Aux<B: gfx_hal::Backend> {
     frames: usize,
@@ -195,7 +222,6 @@ where
                         stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
                         immutable_samplers: false,
                     },
-                    // ADDED
                     gfx_hal::pso::DescriptorSetLayoutBinding {
                         binding: 1,
                         ty: gfx_hal::pso::DescriptorType::SampledImage,
@@ -509,7 +535,7 @@ fn main() {
         1,
         factory.get_surface_format(&surface),
         Some(gfx_hal::command::ClearValue::Color(
-            [1.0, 1.0, 1.0, 1.0].into(),
+            [0.1, 0.2, 0.3, 1.0].into(),
         )),
     );
 
@@ -552,6 +578,7 @@ fn main() {
 
     let sampler_info = SamplerInfo::new(Filter::Linear, WrapMode::Clamp);
     let scene = Scene {
+        // TODO: Make view and proj separate?  Maybe.  We should only need one.
         camera: Camera {
             proj: Transform3::ortho(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
             view: Transform3::create_translation(0.0, 0.0, 10.0),
@@ -583,8 +610,6 @@ fn main() {
 
     let mut frames = 0u64..;
     let mut rng = rand::thread_rng();
-    let rxy = Uniform::new(-1.0, 1.0);
-    let rz = Uniform::new(0.0, 185.0);
 
     let mut fpss = Vec::new();
     let mut checkpoint = started;
@@ -605,7 +630,8 @@ fn main() {
             graph.run(&mut factory, &mut families, &aux);
 
             let elapsed = checkpoint.elapsed();
-
+            aux.scene.add_object(&mut rng);
+/*
             if aux.scene.objects.len() < MAX_OBJECTS {
                 let z = rz.sample(&mut rng);
                 let transform = Transform3::create_translation(
@@ -616,7 +642,7 @@ fn main() {
                 let src = Rect::from(
                     euclid::Size2D::new(1.0, 1.0)
                 );
-                let color = [1.0, 1.0, 1.0, 1.0];
+                let color = [1.0, 0.0, 1.0, 1.0];
                 let instance = InstanceData {
                     transform,
                     src,
@@ -624,6 +650,7 @@ fn main() {
                 };
                 aux.scene.objects.push(instance);
             }
+*/
 
             if should_close
                 || elapsed > std::time::Duration::new(5, 0)
