@@ -114,9 +114,11 @@ struct Scene<B: gfx_hal::Backend> {
     camera: Camera,
     object_mesh: Option<Mesh<B>>,
     objects: Vec<Transform3>,
-    texture: Option<Texture<B>>,
+    texture: Texture<B>,
+    /*
     sampler_info: B::Sampler,
     view_kind: B::ImageView,
+*/
 }
 
 #[derive(Debug)]
@@ -246,7 +248,7 @@ where
         self,
         _ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
-        queue: QueueId,
+        _queue: QueueId,
         aux: &Aux<B>,
         buffers: Vec<NodeBuffer>,
         images: Vec<NodeImage>,
@@ -270,7 +272,6 @@ where
             )
             .unwrap();
 
-        let texture = aux.scene.texture.as_ref().unwrap();
 
         let mut sets = Vec::new();
         for index in 0..frames {
@@ -294,7 +295,7 @@ where
                     binding: 1,
                     array_offset: 0,
                     descriptors: vec![gfx_hal::pso::Descriptor::Image(
-                        &aux.scene.view_kind,
+                        aux.scene.texture.view().raw(),
                         gfx_hal::image::Layout::ShaderReadOnlyOptimal,
                     )],
                 }));
@@ -302,7 +303,7 @@ where
                     set: set.raw(),
                     binding: 2,
                     array_offset: 0,
-                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(&aux.scene.sampler_info)],
+                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(aux.scene.texture.sampler().raw())],
                 }));
 
                 sets.push(set);
@@ -461,6 +462,36 @@ fn main() {
 
     graph_builder.add_node(present_builder);
 
+    // HACK suggested by Frizi, just use queue 0 for everything
+    // instead of getting it from
+    // graph.node_queue(pass),
+    let queue_id = QueueId {
+        family: families.family_by_index(0).id(),
+        index: 0,
+    };
+
+    // This is how we can load an image and create a new texture.
+    let image_bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/data/logo.png"
+    ));
+
+    let texture_builder =
+        rendy::texture::image::load_from_image(image_bytes, Default::default())
+        .expect("Could not load texture?");
+
+    let texture = texture_builder
+        .build(
+            ImageState {
+                queue: queue_id,
+                stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
+                access: gfx_hal::image::Access::SHADER_READ,
+                layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+            },
+            &mut factory,
+        )
+        .unwrap();
+
     let scene = Scene {
         camera: Camera {
             proj: Transform3::ortho(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
@@ -468,11 +499,8 @@ fn main() {
         },
         object_mesh: None,
         objects: vec![],
-        texture: None,
-        view_kind: (),
-        sampler_info: (),
+        texture: texture,
     };
-
 
 
     let mut aux = Aux {
@@ -528,30 +556,6 @@ fn main() {
     );
 
 
-    // This is how we can load an image and create a new texture.
-    let image_bytes = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/data/logo.png"
-    ));
-
-    let texture_builder =
-        rendy::texture::image::load_from_image(image_bytes, Default::default())
-        .expect("Could not load texture?");
-
-    let texture = texture_builder
-        .build(
-            ImageState {
-                // TODO: Is this queue right?
-                queue: graph.node_queue(pass),
-                stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
-                access: gfx_hal::image::Access::SHADER_READ,
-                layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
-            },
-            &mut factory,
-        )
-        .unwrap();
-
-    aux.scene.texture = Some(texture);
 
 
 
