@@ -13,7 +13,7 @@ layout(std140, set = 0, binding = 0) uniform Args {
     mat4 proj;
     mat4 view;
 };
-layout(set = 0, binding = 1) uniform texture2D colormap;
+layout(set = 0, binding = 1) uniform texture2D colortex;
 layout(set = 0, binding = 2) uniform sampler colorsampler;
 
 
@@ -22,6 +22,6 @@ void main() {
 
     vec3 frag_pos = in_pos.xyz / in_pos.w;
 
-    color = texture(sampler2D(colormap, colorsampler), uv.xy);
+    color = texture(sampler2D(colortex, colorsampler), uv.xy) * frag_color;
     //color = vec4(0,0,0,1);
 }

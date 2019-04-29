@@ -17,7 +17,6 @@ for example by reifying the geometry in the vertex shader a la the Rendy
 quads example.
  */
 
-
 #![cfg_attr(
     not(any(feature = "dx12", feature = "metal", feature = "vulkan")),
     allow(unused)
@@ -30,11 +29,14 @@ use {
         graph::{
             present::PresentNode, render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage,
         },
-        hal::Device as _,
         hal as gfx_hal,
+        hal::Device as _,
         memory::Dynamic,
         mesh::{AsVertex, Mesh, PosColorNorm, Transform},
-        resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle, Image, ImageView, ViewKind, SamplerInfo, Filter, WrapMode},
+        resource::{
+            Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, Image,
+            ImageView, SamplerInfo, ViewKind, WrapMode,
+        },
         shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo},
         texture::Texture,
     },
@@ -42,19 +44,17 @@ use {
 
 use std::{mem::size_of, time};
 
-
 use rand::distributions::{Distribution, Uniform};
 
 use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
 use euclid;
 
-
 type Point2 = euclid::Vector2D<f32>;
 type Vector2 = euclid::Vector2D<f32>;
 type Vector3 = euclid::Vector3D<f32>;
 type Transform3 = euclid::Transform3D<f32>;
-type Color = [f32;4];
+type Color = [f32; 4];
 type Rect = euclid::Rect<f32>;
 
 // TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
@@ -85,8 +85,11 @@ lazy_static::lazy_static! {
     ).precompile().unwrap();
 }
 
+
+/// ggez's input draw params.  This just gets turned into
+/// an InstanceData but it's good to keep in mind what we're
+/// doing here.
 #[derive(Clone, Copy, Debug)]
-#[repr(C, align(16))]
 pub struct DrawParam {
     pub src: Rect,
     pub dest: Point2,
@@ -96,6 +99,18 @@ pub struct DrawParam {
     pub color: Color,
 }
 
+/// Data we need per instance.  DrawParam gets turned into this.
+/// We have to be *quite particular* about layout since this gets
+/// fed straight to the shader.
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug)]
+struct InstanceData {
+    transform: Transform3,
+    src: Rect,
+    color: Color,
+}
+
+/// Uniform data.  Each Scene contains one of these.
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 struct UniformArgs {
@@ -103,6 +118,7 @@ struct UniformArgs {
     view: Transform3,
 }
 
+/// Basically UniformArgs
 #[derive(Debug)]
 struct Camera {
     view: Transform3,
@@ -112,10 +128,10 @@ struct Camera {
 #[derive(Debug)]
 struct Scene<B: gfx_hal::Backend> {
     camera: Camera,
-    object_mesh: Option<Mesh<B>>,
-    objects: Vec<Transform3>,
+    object_mesh: Mesh<B>,
+    objects: Vec<InstanceData>,
     texture: Texture<B>,
-    
+
     /// We just need the actual config for the sampler 'cause
     /// Rendy's `Factory` can manage a sampler cache itself.
     sampler_info: SamplerInfo,
@@ -130,23 +146,23 @@ struct Aux<B: gfx_hal::Backend> {
 
 const MAX_OBJECTS: usize = 10_000;
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
-const TRANSFORMS_SIZE: u64 = size_of::<Transform>() as u64 * MAX_OBJECTS as u64;
+const INSTANCES_SIZE: u64 = size_of::<InstanceData>() as u64 * MAX_OBJECTS as u64;
 const INDIRECT_SIZE: u64 = size_of::<DrawIndexedCommand>() as u64;
 
 const fn buffer_frame_size(align: u64) -> u64 {
-    ((UNIFORM_SIZE + TRANSFORMS_SIZE + INDIRECT_SIZE - 1) / align + 1) * align
+    ((UNIFORM_SIZE + INSTANCES_SIZE + INDIRECT_SIZE - 1) / align + 1) * align
 }
 
 const fn uniform_offset(index: usize, align: u64) -> u64 {
     buffer_frame_size(align) * index as u64
 }
 
-const fn transforms_offset(index: usize, align: u64) -> u64 {
+const fn instances_offset(index: usize, align: u64) -> u64 {
     uniform_offset(index, align) + UNIFORM_SIZE
 }
 
 const fn indirect_offset(index: usize, align: u64) -> u64 {
-    transforms_offset(index, align) + TRANSFORMS_SIZE
+    instances_offset(index, align) + INSTANCES_SIZE
 }
 
 #[derive(Debug, Default)]
@@ -349,7 +365,7 @@ where
                     &mut self.buffer,
                     indirect_offset(index, align),
                     &[DrawIndexedCommand {
-                        index_count: scene.object_mesh.as_ref().unwrap().len(),
+                        index_count: scene.object_mesh.len(),
                         instance_count: scene.objects.len() as u32,
                         first_index: 0,
                         vertex_offset: 0,
@@ -364,7 +380,7 @@ where
                 factory
                     .upload_visible_buffer(
                         &mut self.buffer,
-                        transforms_offset(index, align),
+                        instances_offset(index, align),
                         &scene.objects[..],
                     )
                     .unwrap()
@@ -387,17 +403,14 @@ where
             Some(self.sets[index].raw()),
             std::iter::empty(),
         );
-        aux
-            .scene
+        aux.scene
             .object_mesh
-            .as_ref()
-            .unwrap()
             .bind(&[PosColorNorm::VERTEX], &mut encoder)
             .expect("Could not bind mesh?");
 
         encoder.bind_vertex_buffers(
             1,
-            std::iter::once((self.buffer.raw(), transforms_offset(index, aux.align))),
+            std::iter::once((self.buffer.raw(), instances_offset(index, aux.align))),
         );
         encoder.draw_indexed_indirect(
             self.buffer.raw(),
@@ -411,15 +424,13 @@ where
 }
 
 fn make_texture<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Texture<B>
-where B: gfx_hal::Backend {
+where
+    B: gfx_hal::Backend,
+{
     // This is how we can load an image and create a new texture.
-    let image_bytes = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/data/logo.png"
-    ));
+    let image_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/logo.png"));
 
-    let texture_builder =
-        rendy::texture::image::load_from_image(image_bytes, Default::default())
+    let texture_builder = rendy::texture::image::load_from_image(image_bytes, Default::default())
         .expect("Could not load texture?");
 
     let texture = texture_builder
@@ -432,13 +443,49 @@ where B: gfx_hal::Backend {
             },
             factory,
         )
-            .unwrap();
-        texture
+        .unwrap();
+    texture
+}
+
+fn make_quad_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
+where
+    B: gfx_hal::Backend,
+{
+    let verts: Vec<[f32; 3]> = vec![
+        [0.0, 0.0, 0.5],
+        [0.0, 10.0, 0.5],
+        [10.0, 10.0, 0.5],
+        [0.0, 0.0, 0.5],
+        [10.0, 10.0, 0.5],
+        [10.0, 0.0, 0.5],
+    ];
+    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 3, 4, 5]);
+    let vertices: Vec<_> = verts
+        .into_iter()
+        // TODO: Mesh color... how do we want to handle this?
+        .map(|v| PosColorNorm {
+            position: rendy::mesh::Position::from(v),
+            color: [
+                (v[0] + 1.0) / 2.0,
+                (v[1] + 1.0) / 2.0,
+                (v[2] + 1.0) / 2.0,
+                1.0,
+            ]
+            .into(),
+            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
+        })
+        .collect();
+
+        let m = Mesh::<Backend>::builder()
+            .with_indices(indices)
+            .with_vertices(&vertices[..])
+            .build(queue_id, &factory)
+        .unwrap();
+    m
 }
 
 #[cfg(any(feature = "dx12", feature = "metal", feature = "vulkan"))]
 fn main() {
-
     let config: Config = Default::default();
 
     let (mut factory, mut families): (Factory<Backend>, _) = rendy::factory::init(config).unwrap();
@@ -490,39 +537,18 @@ fn main() {
     graph_builder.add_node(present_builder);
 
     // HACK suggested by Frizi, just use queue 0 for everything
-    // instead of getting it from
-    // graph.node_queue(pass),
+    // instead of getting it from `graph.node_queue(pass)`.
+    // Since we control in our `Config` what families we have
+    // and what they have, as long as we only ever use one family
+    // (which is probably fine) then we're prooooobably okay with
+    // this.
     let queue_id = QueueId {
         family: families.family_by_index(0).id(),
         index: 0,
     };
 
-    /*
-    // This is how we can load an image and create a new texture.
-    let image_bytes = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/data/logo.png"
-    ));
-
-   
-    let texture_builder =
-        rendy::texture::image::load_from_image(image_bytes, Default::default())
-        .expect("Could not load texture?");
-
-    let texture = texture_builder
-        .build(
-            ImageState {
-                queue: queue_id,
-                stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
-                access: gfx_hal::image::Access::SHADER_READ,
-                layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
-            },
-            &mut factory,
-        )
-        .unwrap();
-*/
-
     let texture = make_texture(queue_id, &mut factory);
+    let object_mesh = make_quad_mesh(queue_id, &mut factory);
 
     let sampler_info = SamplerInfo::new(Filter::Linear, WrapMode::Clamp);
     let scene = Scene {
@@ -530,13 +556,12 @@ fn main() {
             proj: Transform3::ortho(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
             view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
-        object_mesh: None,
         objects: vec![],
-        texture: texture,
+        object_mesh,
+        texture,
 
         sampler_info,
     };
-
 
     let mut aux = Aux {
         frames: frames as _,
@@ -547,52 +572,12 @@ fn main() {
         scene,
     };
 
-
     let mut graph = graph_builder
         .with_frames_in_flight(frames)
         .build(&mut factory, &mut families, &aux)
         .unwrap();
 
     log::info!("{:#?}", aux.scene);
-
-    let verts: Vec<[f32;3]> = vec![
-        [0.0, 0.0, 0.5],
-        [0.0, 10.0, 0.5],
-        [10.0, 10.0, 0.5],
-        [0.0, 0.0, 0.5],
-        [10.0, 10.0, 0.5],
-        [10.0, 0.0, 0.5],
-    ];
-    let indices = rendy::mesh::Indices::from( vec![
-        0u32, 1, 2, 3, 4, 5
-        ]);
-    let vertices: Vec<_> = verts
-        .into_iter()
-        .map(|v| PosColorNorm {
-            position: rendy::mesh::Position::from(v),
-            color: [
-                (v[0] + 1.0) / 2.0,
-                (v[1] + 1.0) / 2.0,
-                (v[2] + 1.0) / 2.0,
-                1.0,
-            ]
-                .into(),
-            // TODO: Double-check this; z goes into screen, right?
-            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0])
-        })
-        .collect();
-
-    aux.scene.object_mesh = Some(
-        Mesh::<Backend>::builder()
-            .with_indices(indices)
-            .with_vertices(&vertices[..])
-            .build(graph.node_queue(pass), &factory)
-            .unwrap(),
-    );
-
-
-
-
 
     let started = time::Instant::now();
 
@@ -622,13 +607,22 @@ fn main() {
             let elapsed = checkpoint.elapsed();
 
             if aux.scene.objects.len() < MAX_OBJECTS {
-                    let z = rz.sample(&mut rng);
-                    let trans = Transform3::create_translation(
-                            rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                            rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                            -z,
-                        );
-                aux.scene.objects.push(trans);
+                let z = rz.sample(&mut rng);
+                let transform = Transform3::create_translation(
+                    rxy.sample(&mut rng) * (z / 2.0 + 4.0),
+                    rxy.sample(&mut rng) * (z / 2.0 + 4.0),
+                    -z,
+                );
+                let src = Rect::from(
+                    euclid::Size2D::new(1.0, 1.0)
+                );
+                let color = [1.0, 1.0, 1.0, 1.0];
+                let instance = InstanceData {
+                    transform,
+                    src,
+                    color,
+                };
+                aux.scene.objects.push(instance);
             }
 
             if should_close

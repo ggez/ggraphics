@@ -4,8 +4,11 @@
 layout(location = 0) in vec3 pos;
 layout(location = 1) in vec4 color;
 layout(location = 2) in vec3 norm;
+// per-instance data below here?.
 // vec4[4] is used instead of mat4 due to spirv-cross bug for dx12 backend
-layout(location = 3) in vec4 model[4]; // per-instance.
+layout(location = 3) in vec4 model[4];
+layout(location = 4) in vec4 src;
+layout(location = 5) in vec4 color;
 
 layout(set = 0, binding = 0) uniform Args {
     mat4 proj;
