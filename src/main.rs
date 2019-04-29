@@ -17,10 +17,6 @@ for example by reifying the geometry in the vertex shader a la the Rendy
 quads example.
  */
 
-#![cfg_attr(
-    not(any(feature = "dx12", feature = "metal", feature = "vulkan")),
-    allow(unused)
-)]
 use {
     gfx_hal::PhysicalDevice as _,
     rendy::{
@@ -61,6 +57,9 @@ type Rect = euclid::Rect<f32>;
 // Perhaps.
 // For now though, this is okay if not great.
 // It WOULD be quite nice to be able to play with OpenGL and DX12 backends.
+//
+// TODO: We ALSO need to specify features to rendy to build these, so.  For now we only ever
+// specify Vulkan.
 #[cfg(target_os = "macos")]
 type Backend = rendy::metal::Backend;
 
@@ -510,7 +509,6 @@ where
     m
 }
 
-#[cfg(any(feature = "dx12", feature = "metal", feature = "vulkan"))]
 fn main() {
     let config: Config = Default::default();
 
@@ -631,26 +629,6 @@ fn main() {
 
             let elapsed = checkpoint.elapsed();
             aux.scene.add_object(&mut rng);
-/*
-            if aux.scene.objects.len() < MAX_OBJECTS {
-                let z = rz.sample(&mut rng);
-                let transform = Transform3::create_translation(
-                    rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                    rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                    -z,
-                );
-                let src = Rect::from(
-                    euclid::Size2D::new(1.0, 1.0)
-                );
-                let color = [1.0, 0.0, 1.0, 1.0];
-                let instance = InstanceData {
-                    transform,
-                    src,
-                    color,
-                };
-                aux.scene.objects.push(instance);
-            }
-*/
 
             if should_close
                 || elapsed > std::time::Duration::new(5, 0)
@@ -671,9 +649,4 @@ fn main() {
     log::info!("FPS: {:#?}", fpss);
 
     graph.dispose(&mut factory, &aux);
-}
-
-#[cfg(not(any(feature = "dx12", feature = "metal", feature = "vulkan")))]
-fn main() {
-    panic!("Specify feature: { dx12, metal, vulkan }");
 }
