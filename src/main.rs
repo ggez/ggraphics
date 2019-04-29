@@ -139,22 +139,23 @@ struct Scene<B: gfx_hal::Backend> {
 impl<B> Scene<B> where B: gfx_hal::Backend {
     fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng) {
         let rxy = Uniform::new(-1.0, 1.0);
+        let rxy2 = Uniform::new(0.0, 500.0);
         let rz = Uniform::new(0.0, 185.0);
 
         if self.objects.len() < MAX_OBJECTS {
                 let z = rz.sample(rng);
+                let transform = Transform3::create_translation(
+                    rxy2.sample(rng),
+                    rxy2.sample(rng),
+                    -100.0
+                );
+
+                /*
                  let transform = Transform3::create_translation(
                     rxy.sample(rng) * (z / 2.0 + 4.0),
                     rxy.sample(rng) * (z / 2.0 + 4.0),
                     -z,
                     );
-
-                /*
-                let transform = Transform3::create_translation(
-                    rxy.sample(rng),
-                    rxy.sample(rng),
-                    -50.0,
-                );
             let transform = Transform3::create_translation(
                 rxy.sample(rng) * 1000.0,
                 rxy.sample(rng) * 1000.0,
@@ -489,12 +490,12 @@ impl<B> Scene<B> where B: gfx_hal::Backend {
         B: gfx_hal::Backend,
     {
         let verts: Vec<[f32; 3]> = vec![
-            [0.0, 0.0, 0.5],
-            [0.0, 10.0, 0.5],
-            [10.0, 10.0, 0.5],
-            [0.0, 0.0, 0.5],
-            [10.0, 10.0, 0.5],
-            [10.0, 0.0, 0.5],
+            [0.0, 0.0, 0.0],
+            [0.0, 100.0, 0.0],
+            [100.0, 100.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [100.0, 100.0, 0.0],
+            [100.0, 0.0, 0.0],
         ];
         let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 3, 4, 5]);
         let vertices: Vec<_> = verts
@@ -591,14 +592,14 @@ impl<B> Scene<B> where B: gfx_hal::Backend {
         let _texture2 = make_texture(queue_id, &mut factory, gfx_bytes);
         let object_mesh = make_quad_mesh(queue_id, &mut factory);
 
-        let sampler_info = SamplerInfo::new(Filter::Linear, WrapMode::Clamp);
+        let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
         let width = window_size.width as f32;
         let height = window_size.height as f32;
         println!("dims: {}x{}", width, height);
         let scene = Scene {
             // TODO: Make view and proj separate?  Maybe.  We should only need one.
             camera: Camera {
-            proj: Transform3::ortho(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
+            proj: Transform3::ortho(0.0, width, height, 0.0, 1.0, 200.0),
 
                 view: Transform3::create_translation(0.0, 0.0, 10.0),
             },
