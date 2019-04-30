@@ -458,6 +458,7 @@ where
                 .unwrap()
         };
 
+        let half_len = scene.objects.len() as u32;
         unsafe {
             factory
                 .upload_visible_buffer(
@@ -465,10 +466,17 @@ where
                     indirect_offset(index, align),
                     &[DrawIndexedCommand {
                         index_count: scene.object_mesh.len(),
-                        instance_count: scene.objects.len() as u32,
+                        instance_count: half_len,
                         first_index: 0,
                         vertex_offset: 0,
                         first_instance: 0,
+                    },
+                    DrawIndexedCommand {
+                        index_count: scene.object_mesh.len(),
+                        instance_count: half_len,
+                        first_index: 0,
+                        vertex_offset: 0,
+                        first_instance: half_len,
                     }],
                 )
                 .unwrap()
@@ -500,7 +508,7 @@ where
         let descriptor_set2 = vec![self.sets[3].raw()];
         let vertex_buffers = vec![
             (self.buffer.raw(), instances_offset(index, aux.align)),
-            (self.buffer.raw(), instances_offset(index, aux.align)),
+            // (self.buffer.raw(), instances_offset(index, aux.align)),
         ];
 
         aux.scene
@@ -526,6 +534,12 @@ where
             1,
             INDIRECT_SIZE as u32,
         );
+        // encoder.draw_indexed(
+        //     0..6,
+        //     0,
+        //     0..(aux.scene.objects.len() as u32),
+        // );
+
 
         encoder.bind_graphics_descriptor_sets(
             layout,
@@ -535,10 +549,11 @@ where
         );
         encoder.draw_indexed_indirect(
             self.buffer.raw(),
-            indirect_offset(index, aux.align),
+            indirect_offset(index, aux.align) + INDIRECT_SIZE,
             1,
             INDIRECT_SIZE as u32,
         );
+
     }
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
