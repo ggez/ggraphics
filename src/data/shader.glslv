@@ -29,6 +29,6 @@ void main() {
     // instead of having to divide by the size of the quad
     // We also invert Y here to make things right-side up.
     uv = vec4(pos.x / 100.0, 1 - (pos.y / 100.0), 0, 0);
-    
+
     gl_Position = proj * view * frag_pos;
 }

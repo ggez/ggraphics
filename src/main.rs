@@ -128,7 +128,9 @@ struct Scene<B: gfx_hal::Backend> {
     camera: Camera,
     object_mesh: Mesh<B>,
     objects: Vec<InstanceData>,
+    objects2: Vec<InstanceData>,
     texture: Texture<B>,
+    texture2: Texture<B>,
 
     /// We just need the actual config for the sampler 'cause
     /// Rendy's `Factory` can manage a sampler cache itself.
@@ -140,28 +142,12 @@ where
     B: gfx_hal::Backend,
 {
     fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng) {
-        let rxy = Uniform::new(-1.0, 1.0);
         let rxy2 = Uniform::new(0.0, 500.0);
-        let rz = Uniform::new(0.0, 185.0);
 
         if self.objects.len() < MAX_OBJECTS {
-            let z = rz.sample(rng);
             let transform =
                 Transform3::create_translation(rxy2.sample(rng), rxy2.sample(rng), -100.0);
-
-            /*
-                 let transform = Transform3::create_translation(
-                    rxy.sample(rng) * (z / 2.0 + 4.0),
-                    rxy.sample(rng) * (z / 2.0 + 4.0),
-                    -z,
-                    );
-            let transform = Transform3::create_translation(
-                rxy.sample(rng) * 1000.0,
-                rxy.sample(rng) * 1000.0,
-                100.0,
-            );
-            */
-            println!("Transform: {:?}", transform);
+            // println!("Transform: {:?}", transform);
             let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
             let color = [1.0, 0.0, 1.0, 1.0];
             let instance = InstanceData {
@@ -170,6 +156,18 @@ where
                 color,
             };
             self.objects.push(instance);
+
+            let transform =
+                Transform3::create_translation(rxy2.sample(rng), rxy2.sample(rng), -100.0);
+            // println!("Transform: {:?}", transform);
+            let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
+            let color = [1.0, 0.0, 1.0, 1.0];
+            let instance = InstanceData {
+                transform,
+                src,
+                color,
+            };
+            self.objects2.push(instance);
         }
     }
 }
@@ -223,31 +221,58 @@ where
 
     fn layout(&self) -> Layout {
         Layout {
-            sets: vec![SetLayout {
-                bindings: vec![
-                    gfx_hal::pso::DescriptorSetLayoutBinding {
-                        binding: 0,
-                        ty: gfx_hal::pso::DescriptorType::UniformBuffer,
-                        count: 1,
-                        stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
-                        immutable_samplers: false,
-                    },
-                    gfx_hal::pso::DescriptorSetLayoutBinding {
-                        binding: 1,
-                        ty: gfx_hal::pso::DescriptorType::SampledImage,
-                        count: 1,
-                        stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
-                        immutable_samplers: false,
-                    },
-                    gfx_hal::pso::DescriptorSetLayoutBinding {
-                        binding: 2,
-                        ty: gfx_hal::pso::DescriptorType::Sampler,
-                        count: 1,
-                        stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
-                        immutable_samplers: false,
-                    },
-                ],
-            }],
+            sets: vec![
+                SetLayout {
+                    bindings: vec![
+                        gfx_hal::pso::DescriptorSetLayoutBinding {
+                            binding: 0,
+                            ty: gfx_hal::pso::DescriptorType::UniformBuffer,
+                            count: 1,
+                            stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
+                            immutable_samplers: false,
+                        },
+                        gfx_hal::pso::DescriptorSetLayoutBinding {
+                            binding: 1,
+                            ty: gfx_hal::pso::DescriptorType::SampledImage,
+                            count: 1,
+                            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+                            immutable_samplers: false,
+                        },
+                        gfx_hal::pso::DescriptorSetLayoutBinding {
+                            binding: 2,
+                            ty: gfx_hal::pso::DescriptorType::Sampler,
+                            count: 1,
+                            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+                            immutable_samplers: false,
+                        },
+                    ],
+                },
+                SetLayout {
+                    bindings: vec![
+                        gfx_hal::pso::DescriptorSetLayoutBinding {
+                            binding: 0,
+                            ty: gfx_hal::pso::DescriptorType::UniformBuffer,
+                            count: 1,
+                            stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
+                            immutable_samplers: false,
+                        },
+                        gfx_hal::pso::DescriptorSetLayoutBinding {
+                            binding: 1,
+                            ty: gfx_hal::pso::DescriptorType::SampledImage,
+                            count: 1,
+                            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+                            immutable_samplers: false,
+                        },
+                        gfx_hal::pso::DescriptorSetLayoutBinding {
+                            binding: 2,
+                            ty: gfx_hal::pso::DescriptorType::Sampler,
+                            count: 1,
+                            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+                            immutable_samplers: false,
+                        },
+                    ],
+                },
+            ],
             push_constants: Vec::new(),
         }
     }
@@ -308,7 +333,7 @@ where
     ) -> Result<MeshRenderPipeline<B>, failure::Error> {
         assert!(buffers.is_empty());
         assert!(images.is_empty());
-        assert_eq!(set_layouts.len(), 1);
+        assert_eq!(set_layouts.len(), 2);
 
         let (frames, align) = (aux.frames, aux.align);
 
@@ -328,37 +353,73 @@ where
         let mut sets = Vec::new();
         for index in 0..frames {
             unsafe {
-                let set = factory
-                    .create_descriptor_set(set_layouts[0].clone())
-                    .unwrap();
-                factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                    set: set.raw(),
-                    binding: 0,
-                    array_offset: 0,
-                    descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
-                        buffer.raw(),
-                        Some(uniform_offset(index, align))
-                            ..Some(uniform_offset(index, align) + UNIFORM_SIZE),
-                    )),
-                }));
-                // ADDED
-                factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                    set: set.raw(),
-                    binding: 1,
-                    array_offset: 0,
-                    descriptors: vec![gfx_hal::pso::Descriptor::Image(
-                        aux.scene.texture.view().raw(),
-                        gfx_hal::image::Layout::ShaderReadOnlyOptimal,
-                    )],
-                }));
-                factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                    set: set.raw(),
-                    binding: 2,
-                    array_offset: 0,
-                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
-                }));
+                {
+                    let set = factory
+                        .create_descriptor_set(set_layouts[0].clone())
+                        .unwrap();
 
-                sets.push(set);
+                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                        set: set.raw(),
+                        binding: 0,
+                        array_offset: 0,
+                        descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
+                            buffer.raw(),
+                            Some(uniform_offset(index, align))
+                                ..Some(uniform_offset(index, align) + UNIFORM_SIZE),
+                        )),
+                    }));
+                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                        set: set.raw(),
+                        binding: 1,
+                        array_offset: 0,
+                        descriptors: vec![gfx_hal::pso::Descriptor::Image(
+                            aux.scene.texture.view().raw(),
+                            gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+                        )],
+                    }));
+                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                        set: set.raw(),
+                        binding: 2,
+                        array_offset: 0,
+                        descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
+                    }));
+                    sets.push(set);
+                }
+
+                // Second descriptor set...?
+                {
+                    let set = factory
+                        .create_descriptor_set(set_layouts[1].clone())
+                        .unwrap();
+
+                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                        set: set.raw(),
+                        binding: 0,
+                        array_offset: 0,
+                        descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
+                            buffer.raw(),
+                            Some(uniform_offset(index, align))
+                                ..Some(uniform_offset(index, align) + UNIFORM_SIZE),
+                        )),
+                    }));
+                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                        set: set.raw(),
+                        binding: 1,
+                        array_offset: 0,
+                        descriptors: vec![gfx_hal::pso::Descriptor::Image(
+                            aux.scene.texture2.view().raw(),
+                            gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+                        )],
+                    }));
+                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                        set: set.raw(),
+                        binding: 2,
+                        array_offset: 0,
+                        descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
+                    }));
+
+                    sets.push(set);
+                }
             }
         }
 
@@ -433,10 +494,17 @@ where
         index: usize,
         aux: &Aux<B>,
     ) {
+        let descriptor_sets = vec![self.sets[index].raw(), self.sets[3+index].raw()];
+        let vertex_buffers = vec![
+            (self.buffer.raw(), instances_offset(index, aux.align)),
+            (self.buffer.raw(), instances_offset(index, aux.align)),
+        ];
+
+        println!("Index is {}", index);
         encoder.bind_graphics_descriptor_sets(
             layout,
             0,
-            Some(self.sets[index].raw()),
+            descriptor_sets.into_iter(),
             std::iter::empty(),
         );
         aux.scene
@@ -446,14 +514,16 @@ where
 
         encoder.bind_vertex_buffers(
             1,
-            std::iter::once((self.buffer.raw(), instances_offset(index, aux.align))),
+            // std::iter::once((self.buffer.raw(), instances_offset(index, aux.align))),
+            vertex_buffers.into_iter(),
         );
         encoder.draw_indexed_indirect(
             self.buffer.raw(),
             indirect_offset(index, aux.align),
-            1,
+            2,
             INDIRECT_SIZE as u32,
         );
+
     }
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
@@ -537,7 +607,6 @@ fn main() {
     event_loop.poll_events(|_| ());
 
     let surface = factory.create_surface(window.into());
-    let aspect = surface.aspect();
 
     let mut graph_builder = GraphBuilder::<Backend, Aux<Backend>>::new();
 
@@ -594,7 +663,7 @@ fn main() {
     ));
 
     let texture = make_texture(queue_id, &mut factory, rendy_bytes);
-    let _texture2 = make_texture(queue_id, &mut factory, gfx_bytes);
+    let texture2 = make_texture(queue_id, &mut factory, gfx_bytes);
     let object_mesh = make_quad_mesh(queue_id, &mut factory);
 
     let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
@@ -609,8 +678,10 @@ fn main() {
             view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
         objects: vec![],
+        objects2: vec![],
         object_mesh,
         texture,
+        texture2,
 
         sampler_info,
     };
