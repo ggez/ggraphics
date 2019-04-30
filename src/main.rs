@@ -84,22 +84,11 @@ lazy_static::lazy_static! {
     ).precompile().unwrap();
 }
 
-/// ggez's input draw params.  This just gets turned into
-/// an InstanceData but it's good to keep in mind what we're
-/// doing here.
-#[derive(Clone, Copy, Debug)]
-pub struct DrawParam {
-    pub src: Rect,
-    pub dest: Point2,
-    pub rotation: f32,
-    pub scale: Vector2,
-    pub offset: Point2,
-    pub color: Color,
-}
-
 /// Data we need per instance.  DrawParam gets turned into this.
 /// We have to be *quite particular* about layout since this gets
 /// fed straight to the shader.
+///
+/// TODO: Currently the shader doesn't use src or color though.
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug)]
 struct InstanceData {
@@ -133,7 +122,11 @@ where
     /// The buffer where we store uniform and instance data.
     buffer: Escape<Buffer<B>>,
     /// One descriptor set per draw call we do.
+    /// Also has the number of instances in that draw call,
+    /// so we can find offsets.
     descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
+    /// Offsets in the buffer to start each draw call from.
+    draw_offsets: Vec<u64>,
 }
 
 impl<B> FrameInFlight<B>
@@ -177,7 +170,7 @@ where
         let buffer = factory
             .create_buffer(
                 BufferInfo {
-                    size: buffer_frame_size(align),
+                    size: gbuffer_size(align),
                     usage: gfx_hal::buffer::Usage::UNIFORM
                         | gfx_hal::buffer::Usage::INDIRECT
                         | gfx_hal::buffer::Usage::VERTEX,
@@ -190,6 +183,7 @@ where
         Self {
             buffer,
             descriptor_sets,
+            draw_offsets: vec![],
         }
     }
 
@@ -197,8 +191,9 @@ where
     /// at its resources.
     ///
     /// For now we do not care about reusing descriptor sets.
-    /// They all have the same layout though, so should be easy.
-    fn add_descriptor_set(
+    /// They all have the same layout though, so should be easy
+    /// eventually, but for now meh.
+    fn add_descriptor_sets(
         &mut self,
         factory: &mut Factory<B>,
         draw_call: &DrawCall<B>,
@@ -218,7 +213,7 @@ where
                 array_offset: 0,
                 descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
                     self.buffer.raw(),
-                    Some(uniform_offset(0, align))..Some(uniform_offset(0, align) + UNIFORM_SIZE),
+                    Some(guniform_offset())..Some(guniform_offset() + UNIFORM_SIZE),
                 )),
             }));
             factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
@@ -242,45 +237,64 @@ where
 
     /// This happens before a frame; it should take a LIST of draw calls and take
     /// care of uploading EACH of them into the buffer so they don't clash!
-    fn prepare(&mut self, factory: &mut Factory<B>, draw_call: &DrawCall<B>, align: u64) {
+    fn prepare(
+        &mut self,
+        factory: &mut Factory<B>,
+        uniforms: &UniformData,
+        draw_calls: &[DrawCall<B>],
+        layout: &Handle<DescriptorSetLayout<B>>,
+        align: u64,
+    ) {
+        let mut instance_count = 0;
         unsafe {
             factory
-                .upload_visible_buffer(
-                    &mut self.buffer,
-                    uniform_offset(0, align),
-                    &[draw_call.uniforms.clone()],
-                )
+                .upload_visible_buffer(&mut self.buffer, guniform_offset(), &[uniforms.clone()])
                 .unwrap();
-                        factory
-            .upload_visible_buffer(
-                &mut self.buffer,
-                instances_offset(0, align),
-                &draw_call.objects[..],
-            )
-            .unwrap()
-        };
+
+            for draw_call in draw_calls {
+                self.add_descriptor_sets(factory, draw_call, layout, align);
+
+                // Upload the instances to the right offset in the
+                // buffer.
+                factory
+                    .upload_visible_buffer(
+                        &mut self.buffer,
+                        ginstance_offset(instance_count),
+                        &draw_call.objects[..],
+                    )
+                    .unwrap();
+                self.draw_offsets.push(ginstance_offset(instance_count));
+                instance_count += draw_call.objects.len();
+            }
+        }
     }
 
-    /// Draws something.
-    /// This should take a LIST of draw calls and draw them all!
+    /// Draws a list of DrawCall's.
     ///
-    /// ...actually do we need to bother?  Not sure whether that
-    /// will make life any simpler.
-    /// Yeah it will because we need to zip the draw call together
-    /// with its associated descriptor set.
-    fn draw(&mut self, draw_calls: &[DrawCall<B>],
-                    layout: &B::PipelineLayout,
+    /// TODO: Okay I need to stop here because my brain is melting
+    /// and I'm probably misunderstanding stuff.
+    fn draw(
+        &mut self,
+        draw_calls: &[DrawCall<B>],
+        layout: &B::PipelineLayout,
         encoder: &mut RenderPassEncoder<'_, B>,
-            align: u64
+        align: u64,
     ) {
-        for (draw_call, descriptor_set) in draw_calls.iter().zip(&self.descriptor_sets) {
-            draw_call.mesh
+        let mut instances_count = 0;
+        for ((draw_call, descriptor_set), draw_offset) in draw_calls
+            .iter()
+            .zip(&self.descriptor_sets)
+            .zip(&self.draw_offsets)
+        {
+            draw_call
+                .mesh
                 .bind(&[PosColorNorm::VERTEX], encoder)
                 .expect("Could not bind mesh?");
-            
+
+            // TODO: Thiiiiis does not seem right, investigate.
             encoder.bind_vertex_buffers(
                 1,
-                std::iter::once((self.buffer.raw(), instances_offset(0, align))),
+                std::iter::once((self.buffer.raw(), ginstance_offset(instances_count))),
             );
             encoder.bind_graphics_descriptor_sets(
                 layout,
@@ -291,12 +305,15 @@ where
             // The index count is wrong...?
             // Maybe not.  See https://github.com/amethyst/rendy/issues/119
             let indices = 0..(draw_call.mesh.len() as u32);
+            // THIS count also seems very suspicious.  How does it know how big
+            // an instance is???
+            // But vkCmdDrawIndexed is similar...
+            // ???or where to start drawing in the buffer???
+            // It's not in the descriptor sets...
+            // TODO: It's in the vertex format because apparently instances
+            // are bundled up with per-vertex data.  AUGH.  Whew.  FIX.
             let instances = 0..(draw_call.objects.len() as u32);
-                encoder.draw_indexed(
-                    indices,
-                    0,
-                    instances
-                );
+            encoder.draw_indexed(indices, 0, instances);
         }
     }
 }
@@ -314,7 +331,6 @@ struct DrawCall<B>
 where
     B: gfx_hal::Backend,
 {
-    uniforms: UniformData,
     objects: Vec<InstanceData>,
     mesh: Mesh<B>,
     texture: Texture<B>,
@@ -385,6 +401,36 @@ const fn instances_offset(index: usize, align: u64) -> u64 {
 
 const fn indirect_offset(index: usize, align: u64) -> u64 {
     instances_offset(index, align) + INSTANCES_SIZE
+}
+
+/// The size of the buffer in a `FrameInFlight`.
+///
+/// We pack data from multiple `DrawCall`'s together into one `Buffer`
+/// but each draw call can have a varying amount of instance data,
+/// so we end up with something like:
+///
+/// ```
+/// |Uniforms | Instances1 ... | Instances2 ... | ... | empty space |
+/// ```
+///
+/// Right now we have a fixed size buffer and just limit the number
+/// of objects in it.  TODO: Eventually someday we will grow the buffer
+/// as needed.
+const fn gbuffer_size(align: u64) -> u64 {
+    ((UNIFORM_SIZE + INSTANCES_SIZE - 1) / align + 1) * align
+}
+
+/// Offset of the uniforms section in the buffer.
+const fn guniform_offset() -> u64 {
+    0
+}
+
+/// The offset pointing to free space right after the given number
+/// of instances.
+///
+/// TODO: Are there alignment requirements for this?
+const fn ginstance_offset(instance_count: usize) -> u64 {
+    UNIFORM_SIZE + (instance_count * size_of::<InstanceData>()) as u64
 }
 
 #[derive(Debug, Default)]
@@ -473,6 +519,9 @@ where
     )> {
         vec![
             PosColorNorm::VERTEX.gfx_vertex_input_desc(0),
+            // TODO: THIS IS PROBABLY WHERE INSTANCE PROPERTY STUFF GETS SET.
+            // Explains why things were broken with vertex attributes like color,
+            // I suspect.  Fix!
             Transform::VERTEX.gfx_vertex_input_desc(1),
         ]
     }
