@@ -128,7 +128,6 @@ struct Scene<B: gfx_hal::Backend> {
     camera: Camera,
     object_mesh: Mesh<B>,
     objects: Vec<InstanceData>,
-    objects2: Vec<InstanceData>,
     texture: Texture<B>,
     texture2: Texture<B>,
 
@@ -141,12 +140,13 @@ impl<B> Scene<B>
 where
     B: gfx_hal::Backend,
 {
-    fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng) {
-        let rxy2 = Uniform::new(0.0, 500.0);
+    fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng, max_width: f32, max_height: f32) {
+        let rx = Uniform::new(0.0, max_width);
+        let ry = Uniform::new(0.0, max_height);
 
         if self.objects.len() < MAX_OBJECTS {
             let transform =
-                Transform3::create_translation(rxy2.sample(rng), rxy2.sample(rng), -100.0);
+                Transform3::create_translation(rx.sample(rng), ry.sample(rng), -100.0);
             // println!("Transform: {:?}", transform);
             let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
             let color = [1.0, 0.0, 1.0, 1.0];
@@ -157,6 +157,7 @@ where
             };
             self.objects.push(instance);
 
+/*
             let transform =
                 Transform3::create_translation(rxy2.sample(rng), rxy2.sample(rng), -100.0);
             // println!("Transform: {:?}", transform);
@@ -168,6 +169,7 @@ where
                 color,
             };
             self.objects2.push(instance);
+            */
         }
     }
 }
@@ -494,19 +496,13 @@ where
         index: usize,
         aux: &Aux<B>,
     ) {
-        let descriptor_sets = vec![self.sets[index].raw(), self.sets[3+index].raw()];
+        let descriptor_set1 = vec![self.sets[0].raw()];
+        let descriptor_set2 = vec![self.sets[3].raw()];
         let vertex_buffers = vec![
             (self.buffer.raw(), instances_offset(index, aux.align)),
             (self.buffer.raw(), instances_offset(index, aux.align)),
         ];
 
-        println!("Index is {}", index);
-        encoder.bind_graphics_descriptor_sets(
-            layout,
-            0,
-            descriptor_sets.into_iter(),
-            std::iter::empty(),
-        );
         aux.scene
             .object_mesh
             .bind(&[PosColorNorm::VERTEX], &mut encoder)
@@ -517,13 +513,32 @@ where
             // std::iter::once((self.buffer.raw(), instances_offset(index, aux.align))),
             vertex_buffers.into_iter(),
         );
+        println!("Index is {}", index);
+        encoder.bind_graphics_descriptor_sets(
+            layout,
+            0,
+            descriptor_set1.into_iter(),
+            std::iter::empty(),
+        );
         encoder.draw_indexed_indirect(
             self.buffer.raw(),
             indirect_offset(index, aux.align),
-            2,
+            1,
             INDIRECT_SIZE as u32,
         );
 
+        encoder.bind_graphics_descriptor_sets(
+            layout,
+            0,
+            descriptor_set2.into_iter(),
+            std::iter::empty(),
+        );
+        encoder.draw_indexed_indirect(
+            self.buffer.raw(),
+            indirect_offset(index, aux.align),
+            1,
+            INDIRECT_SIZE as u32,
+        );
     }
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
@@ -569,12 +584,12 @@ where
         // TODO: Mesh color... how do we want to handle this?
         .map(|v| PosColorNorm {
             position: rendy::mesh::Position::from(v),
-            color: [
-                (v[0] + 1.0) / 2.0,
-                (v[1] + 1.0) / 2.0,
-                (v[2] + 1.0) / 2.0,
-                1.0,
-            ]
+            color: [1.0, 1.0, 1.0, 1.0]
+                // (v[0] + 1.0) / 2.0,
+                // (v[1] + 1.0) / 2.0,
+                // (v[2] + 1.0) / 2.0,
+            //     1.0,
+            // ]
             .into(),
             normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
         })
@@ -662,8 +677,8 @@ fn main() {
         "/src/data/gfx_logo.png"
     ));
 
-    let texture = make_texture(queue_id, &mut factory, rendy_bytes);
-    let texture2 = make_texture(queue_id, &mut factory, gfx_bytes);
+    let texture = make_texture(queue_id, &mut factory, gfx_bytes);
+    let texture2 = make_texture(queue_id, &mut factory, rendy_bytes);
     let object_mesh = make_quad_mesh(queue_id, &mut factory);
 
     let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
@@ -678,7 +693,6 @@ fn main() {
             view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
         objects: vec![],
-        objects2: vec![],
         object_mesh,
         texture,
         texture2,
@@ -726,7 +740,7 @@ fn main() {
             graph.run(&mut factory, &mut families, &aux);
 
             let elapsed = checkpoint.elapsed();
-            aux.scene.add_object(&mut rng);
+            aux.scene.add_object(&mut rng, width, height);
 
             if should_close
                 || elapsed > std::time::Duration::new(5, 0)
