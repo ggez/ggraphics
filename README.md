@@ -222,11 +222,14 @@ queue id might be what I'm thinknig of then...
 let me look at that.
 looks like the main way you get a QueueId is from Graph::node_queue though?
 FriziToday at 7:08 PM
-yeah, that one is a bit tough to be foolproof. Currently i just hardcoded queueid 0 :/
+yeah, that one is a bit tough to be foolproof. Currently i just
+hardcoded queueid 0 :/
+```
         let queue_id = QueueId {
             family: self.families.as_mut().unwrap().family_by_index(0).id(),
             index: 0,
         };
+```
 icefoxToday at 7:09 PM
 hmmmm
 FriziToday at 7:09 PM
@@ -238,6 +241,95 @@ you can still do a queue transition if needed later, so it's not that big of a d
 icefoxToday at 7:10 PM
 Aha.
 I will try that then, thank you.
+
+Okay, so of course, handling descriptor sets is a little more
+complicated than I had thought.  From termhn:
+
+from omniviral:
+
+ * If resources are changing from one frame to the next, you basically
+   need one copy of them per frame-in-flight.
+ * "Data from uniform/storage buffer can be accessed by device any
+   time between moment set is bound and last command recorded to that
+   buffer, and also between command buffers submission and fence
+   submitted with it or later signalled.  ie at time of command
+   recording and execution.  Which means you should use separate
+   buffer ranges for data that gets updated each frame because
+   multiple frames can be in flight.  That's what frame indices serve
+   for.  They help you choose unused buffer range to write data
+   into".  THIS EXPLAINS A LOT ABOUT THE MESH EXAMPLE.  "Each time
+   particular index received, rendy guarantee that commands recorded
+   last time this index was received are complete.  Which means you
+   can safely access resources used previously with this index."
+ * Again per omniviral, we can have one set of buffers/descriptors per
+   frame-in-flight but it 
+ * In ggez's case, meshes and textures are not going to change, but
+   uniforms and instance data will.  Those aren't really in the main
+   buffer anyway, so.
+
+Okay, so for each frame in flight we need:
+
+ * A buffer (uniforms, instances, maybe indirect draw info)
+ * A descriptor set
+ * Some way of knowing what mesh, texture and sampler we're using.
+
+For each different thing we're drawing, we need:
+
+ * A mesh, a texture, a sampler, a DescriptorSetLayout, and a
+   descriptor set matchin the layout.
+ * 
+
+Read-only data (meshes, textures, samplers, descriptor set layouts) can be shared between
+frames in flight.  R/W data (buffers, descriptor sets) cannot.  
+
+Switching shaders involves switching pipelines, which we're not doing
+yet.
+
+We have three places to do stuff:
+`SimpleGraphicsPipelineDesc::build()` which is called when the graph
+node is built.  (Other methods on it are as well but they mostly seem
+to return read-only data.)  `SimpleGraphicsPipeline::prepare()` is
+called at the beginning of a frame before any drawing is done.  It's
+intended to do things like upload instance/uniform data per frame.  And
+`SimpleGraphicsPipeline::draw()` does the actual drawing.
+
+Do we want to actually used `draw_indexed_indirect()`?  It may or may
+not make life simpler.  It appears to basically walk down a list of
+`draw_indexed` commands and execute each one.  However those are
+stored in the buffer along with instance and uniform data, so it's one
+more thing to manage.  Hmm, well, if we had multiple pieces of
+geometry that needed to be drawn per `InstanceData` that would be
+great, but we *don't*, so `draw_indirect()` seems like it would be
+just fine.
+
+For reference:
+
+> Rendy provides `Graph` abstraction.
+> `Graph` is made of `Node`s
+> Some nodes can be `RenderPass`'s
+> `RenderPass`'s are made of `Subpass`'s
+> `Subpass`'s are made of `RenderGroups`s
+> And finally `RenderGroup`s can be made of one or multiple pipelines.
+> And for simple case `SimpleRenderingPipeline` can serve as `RenderGroup`
+
+And, again from omniviral:
+
+> Note that SimpleGraphicsPipeline is called Simple because it is simplifiction, good for learning, PoCs and stuff like that.
+>RenderGroup should be used for anything serious in mind.
+
+> For instance you would like to create pipelines on the fly which is not feasible with SimpleGraphicsPipeline as you'd have rebuild whole graph to insert new one.
+> Also RenderGroup would allow to conveniently share state between
+> pipelines.
+
+Sooooo.  Looks like `SimpleGraphicsPipeline` and
+`SimpleGraphicsPipelineDesc` are implemented through
+`SimpleRenderGroup` and `SimpleRenderGroupDesc`.  Those don't look too
+complex.  The main differences seem to be:
+
+ * Slightly simplified inputs
+ * A few shortcuts
+ * A little extra mongling of pipelines and subpasses that I don't yet
+   fully understand.
 
 # Outstanding questions
 

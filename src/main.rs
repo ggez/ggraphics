@@ -109,23 +109,223 @@ struct InstanceData {
 }
 
 /// Uniform data.  Each Scene contains one of these.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C, align(16))]
-struct UniformArgs {
+struct UniformData {
     proj: Transform3,
     view: Transform3,
 }
 
-/// Basically UniformArgs
+/// What data we need for each frame in flight.
+/// We could make different frames share buffers
+/// and descriptor sets and such and only change bits
+/// that aren't in use from other frames, but that's
+/// more complex than I want to get into right now.
+/// Rendy doesn't do any synchronization for us
+/// beyond guarenteeing that when we get a new frame
+/// index everything touched by that frame index is
+/// now free to reuse.
 #[derive(Debug)]
-struct Camera {
-    view: Transform3,
-    proj: Transform3,
+struct FrameInFlight<B>
+where
+    B: gfx_hal::Backend,
+{
+    /// The buffer where we store uniform and instance data.
+    buffer: Escape<Buffer<B>>,
+    /// One descriptor set per draw call we do.
+    descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
+}
+
+impl<B> FrameInFlight<B>
+where
+    B: gfx_hal::Backend,
+{
+    /// All our descriptor sets use the same layout.
+    /// This one!  We have a uniform buffer, an
+    /// image, and a sampler.
+    const LAYOUT: &'static [gfx_hal::pso::DescriptorSetLayoutBinding] = &[
+        gfx_hal::pso::DescriptorSetLayoutBinding {
+            binding: 0,
+            ty: gfx_hal::pso::DescriptorType::UniformBuffer,
+            count: 1,
+            stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
+            immutable_samplers: false,
+        },
+        gfx_hal::pso::DescriptorSetLayoutBinding {
+            binding: 1,
+            ty: gfx_hal::pso::DescriptorType::SampledImage,
+            count: 1,
+            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+            immutable_samplers: false,
+        },
+        gfx_hal::pso::DescriptorSetLayoutBinding {
+            binding: 2,
+            ty: gfx_hal::pso::DescriptorType::Sampler,
+            count: 1,
+            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+            immutable_samplers: false,
+        },
+    ];
+
+    fn get_descriptor_set_layout() -> SetLayout {
+        SetLayout {
+            bindings: Self::LAYOUT.to_vec(),
+        }
+    }
+
+    fn new(factory: &mut Factory<B>, align: u64) -> Self {
+        let buffer = factory
+            .create_buffer(
+                BufferInfo {
+                    size: buffer_frame_size(align),
+                    usage: gfx_hal::buffer::Usage::UNIFORM
+                        | gfx_hal::buffer::Usage::INDIRECT
+                        | gfx_hal::buffer::Usage::VERTEX,
+                },
+                Dynamic,
+            )
+            .unwrap();
+
+        let descriptor_sets = vec![];
+        Self {
+            buffer,
+            descriptor_sets,
+        }
+    }
+
+    /// Takes a draw call and creates a descriptor set that points
+    /// at its resources.
+    ///
+    /// For now we do not care about reusing descriptor sets.
+    /// They all have the same layout though, so should be easy.
+    fn add_descriptor_set(
+        &mut self,
+        factory: &mut Factory<B>,
+        draw_call: &DrawCall<B>,
+        layout: &Handle<DescriptorSetLayout<B>>,
+        align: u64,
+    ) {
+        let sampler = factory
+            .get_sampler(draw_call.sampler_info.clone())
+            .expect("Could not get sampler");
+
+        unsafe {
+            let set = factory.create_descriptor_set(layout.clone()).unwrap();
+
+            factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                set: set.raw(),
+                binding: 0,
+                array_offset: 0,
+                descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
+                    self.buffer.raw(),
+                    Some(uniform_offset(0, align))..Some(uniform_offset(0, align) + UNIFORM_SIZE),
+                )),
+            }));
+            factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                set: set.raw(),
+                binding: 1,
+                array_offset: 0,
+                descriptors: vec![gfx_hal::pso::Descriptor::Image(
+                    draw_call.texture.view().raw(),
+                    gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+                )],
+            }));
+            factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+                set: set.raw(),
+                binding: 2,
+                array_offset: 0,
+                descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
+            }));
+            self.descriptor_sets.push(set);
+        }
+    }
+
+    /// This happens before a frame; it should take a LIST of draw calls and take
+    /// care of uploading EACH of them into the buffer so they don't clash!
+    fn prepare(&mut self, factory: &mut Factory<B>, draw_call: &DrawCall<B>, align: u64) {
+        unsafe {
+            factory
+                .upload_visible_buffer(
+                    &mut self.buffer,
+                    uniform_offset(0, align),
+                    &[draw_call.uniforms.clone()],
+                )
+                .unwrap();
+                        factory
+            .upload_visible_buffer(
+                &mut self.buffer,
+                instances_offset(0, align),
+                &draw_call.objects[..],
+            )
+            .unwrap()
+        };
+    }
+
+    /// Draws something.
+    /// This should take a LIST of draw calls and draw them all!
+    ///
+    /// ...actually do we need to bother?  Not sure whether that
+    /// will make life any simpler.
+    /// Yeah it will because we need to zip the draw call together
+    /// with its associated descriptor set.
+    fn draw(&mut self, draw_calls: &[DrawCall<B>],
+                    layout: &B::PipelineLayout,
+        encoder: &mut RenderPassEncoder<'_, B>,
+            align: u64
+    ) {
+        for (draw_call, descriptor_set) in draw_calls.iter().zip(&self.descriptor_sets) {
+            draw_call.mesh
+                .bind(&[PosColorNorm::VERTEX], encoder)
+                .expect("Could not bind mesh?");
+            
+            encoder.bind_vertex_buffers(
+                1,
+                std::iter::once((self.buffer.raw(), instances_offset(0, align))),
+            );
+            encoder.bind_graphics_descriptor_sets(
+                layout,
+                0,
+                std::iter::once(descriptor_set.raw()),
+                std::iter::empty(),
+            );
+            // The index count is wrong...?
+            // Maybe not.  See https://github.com/amethyst/rendy/issues/119
+            let indices = 0..(draw_call.mesh.len() as u32);
+            let instances = 0..(draw_call.objects.len() as u32);
+                encoder.draw_indexed(
+                    indices,
+                    0,
+                    instances
+                );
+        }
+    }
+}
+
+/// The data we need for a single draw call, which
+/// gets bound to descriptor sets and
+///
+/// For now we re-bind EVERYTHING even if only certain
+/// resources have changed (for example, texture changes
+/// and mesh stays the same).  Should be easy to check
+/// that in the future and make the various things
+/// in here `Option`s.
+#[derive(Debug)]
+struct DrawCall<B>
+where
+    B: gfx_hal::Backend,
+{
+    uniforms: UniformData,
+    objects: Vec<InstanceData>,
+    mesh: Mesh<B>,
+    texture: Texture<B>,
+    /// We just need the actual config for the sampler 'cause
+    /// Rendy's `Factory` can manage a sampler cache itself.
+    sampler_info: SamplerInfo,
 }
 
 #[derive(Debug)]
 struct Scene<B: gfx_hal::Backend> {
-    camera: Camera,
+    camera: UniformData,
     object_mesh: Mesh<B>,
     objects: Vec<InstanceData>,
     texture: Texture<B>,
@@ -145,8 +345,7 @@ where
         let ry = Uniform::new(0.0, max_height);
 
         if self.objects.len() < MAX_OBJECTS {
-            let transform =
-                Transform3::create_translation(rx.sample(rng), ry.sample(rng), -100.0);
+            let transform = Transform3::create_translation(rx.sample(rng), ry.sample(rng), -100.0);
             // println!("Transform: {:?}", transform);
             let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
             let color = [1.0, 0.0, 1.0, 1.0];
@@ -156,20 +355,6 @@ where
                 color,
             };
             self.objects.push(instance);
-
-/*
-            let transform =
-                Transform3::create_translation(rxy2.sample(rng), rxy2.sample(rng), -100.0);
-            // println!("Transform: {:?}", transform);
-            let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
-            let color = [1.0, 0.0, 1.0, 1.0];
-            let instance = InstanceData {
-                transform,
-                src,
-                color,
-            };
-            self.objects2.push(instance);
-            */
         }
     }
 }
@@ -182,7 +367,7 @@ struct Aux<B: gfx_hal::Backend> {
 }
 
 const MAX_OBJECTS: usize = 10_000;
-const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
+const UNIFORM_SIZE: u64 = size_of::<UniformData>() as u64;
 const INSTANCES_SIZE: u64 = size_of::<InstanceData>() as u64 * MAX_OBJECTS as u64;
 const INDIRECT_SIZE: u64 = size_of::<DrawIndexedCommand>() as u64;
 
@@ -450,7 +635,7 @@ where
                 .upload_visible_buffer(
                     &mut self.buffer,
                     uniform_offset(index, align),
-                    &[UniformArgs {
+                    &[UniformData {
                         proj: scene.camera.proj,
                         view: scene.camera.view.inverse().unwrap(),
                     }],
@@ -464,20 +649,22 @@ where
                 .upload_visible_buffer(
                     &mut self.buffer,
                     indirect_offset(index, align),
-                    &[DrawIndexedCommand {
-                        index_count: scene.object_mesh.len(),
-                        instance_count: half_len,
-                        first_index: 0,
-                        vertex_offset: 0,
-                        first_instance: 0,
-                    },
-                    DrawIndexedCommand {
-                        index_count: scene.object_mesh.len(),
-                        instance_count: half_len,
-                        first_index: 0,
-                        vertex_offset: 0,
-                        first_instance: half_len,
-                    }],
+                    &[
+                        DrawIndexedCommand {
+                            index_count: scene.object_mesh.len(),
+                            instance_count: half_len,
+                            first_index: 0,
+                            vertex_offset: 0,
+                            first_instance: 0,
+                        },
+                        DrawIndexedCommand {
+                            index_count: scene.object_mesh.len(),
+                            instance_count: half_len,
+                            first_index: 0,
+                            vertex_offset: 0,
+                            first_instance: half_len,
+                        },
+                    ],
                 )
                 .unwrap()
         };
@@ -540,7 +727,6 @@ where
         //     0..(aux.scene.objects.len() as u32),
         // );
 
-
         encoder.bind_graphics_descriptor_sets(
             layout,
             0,
@@ -553,7 +739,6 @@ where
             1,
             INDIRECT_SIZE as u32,
         );
-
     }
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
@@ -603,9 +788,9 @@ where
                 // (v[0] + 1.0) / 2.0,
                 // (v[1] + 1.0) / 2.0,
                 // (v[2] + 1.0) / 2.0,
-            //     1.0,
-            // ]
-            .into(),
+                //     1.0,
+                // ]
+                .into(),
             normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
         })
         .collect();
@@ -702,7 +887,7 @@ fn main() {
     println!("dims: {}x{}", width, height);
     let scene = Scene {
         // TODO: Make view and proj separate?  Maybe.  We should only need one.
-        camera: Camera {
+        camera: UniformData {
             proj: Transform3::ortho(0.0, width, height, 0.0, 1.0, 200.0),
 
             view: Transform3::create_translation(0.0, 0.0, 10.0),
