@@ -4,8 +4,12 @@
 layout(location = 0) in vec3 pos;
 layout(location = 1) in vec4 color;
 layout(location = 2) in vec3 norm;
+// per-instance data below here?.
 // vec4[4] is used instead of mat4 due to spirv-cross bug for dx12 backend
-layout(location = 3) in vec4 model[4]; // per-instance.
+layout(location = 3) in vec4 model[4];
+// Skip some locations for the members of the vec above
+layout(location = 7) in vec4 src;
+layout(location = 8) in vec4 model_color;
 
 layout(set = 0, binding = 0) uniform Args {
     mat4 proj;
@@ -13,15 +17,18 @@ layout(set = 0, binding = 0) uniform Args {
 };
 
 layout(location = 0) out vec4 frag_pos;
-layout(location = 1) out vec3 frag_norm;
-layout(location = 2) out vec4 frag_color;
-layout(location = 3) out vec4 uv;
+layout(location = 1) out vec4 frag_color;
+layout(location = 2) out vec4 uv;
 
 void main() {
     mat4 model_mat = mat4(model[0], model[1], model[2], model[3]);
+
     frag_color = color;
-    frag_norm = normalize((vec4(norm, 1.0) * model_mat).xyz);
     frag_pos = model_mat * vec4(pos, 1.0);
-    uv = vec4(pos, 0) / 10.0;
+    // TODO: Have unit quad's and scale verts properly by some multiplier,
+    // instead of having to divide by the size of the quad
+    // We also invert Y here to make things right-side up.
+    uv = vec4(pos.x / 100.0, 1 - (pos.y / 100.0), 0, 0);
+    
     gl_Position = proj * view * frag_pos;
 }

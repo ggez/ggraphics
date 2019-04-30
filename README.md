@@ -196,3 +196,52 @@ example from `meshes`:
 
 This code is kinda hacked up, don't trust it to be 100% correct.  Also
 just trivially omitting a depth buffer causes a crash somewhere, so.
+
+Is this a reasonable place to ask for feedback with how to design stuff with Rendy, or should I just bug their issue tracker directly?
+So I don't forget what I'm talking about while making lasagna, I am trying to make a setup that just renders many quads with one texture, based off the meshes example, and I'm getting some dependency inversion stuffs.  If I load a Texture inside a PipelineDesc it feels weird 'cause then textures can't be shared between them, but if I try to create it outside it I need to be able to get my hands on the sampler and imageview for the texture to pass it into the pipeline's build() method.
+FriziToday at 6:15 PM
+you should use TextureBuilder to build a texture outside and slap it into your aux type
+in amethyst_rendy, we basically store those Texture<B> as asset in asset storage, then reference them on ecs via handles. That way I can query the world for objects which can share textures, then dereference and bind those textures in the render pass.
+I don't want to spoil the fun, we have that one already implemented. If all you need is a working implementation of batching sprite renderer, go ahead and use it.
+unless you need that outside of amethyst that is :wink:
+icefoxToday at 6:27 PM
+that's what I'm more or less trying to do but I need the Graph to build the texture and properties from the texture to build the Graph node
+I think.  Let me look at it more.
+Yeah, TextureBuilder::build() takes an ImageState which needs a NodeId which comes from graph.node_queue(pass)
+so the Graph has to be built before the texture
+and GraphBuilder::build() calls my SimpleGraphicsPipelineDesc::build() which sets up the descriptor sets, and Descriptor::Image()needs the ViewKind, which looks like it's just plain ol data
+but Descriptor::Sampler() needs a Sampler which is a handle you need to get from somewhere.
+And this is for a Rendy graphics backend for ggez, so depending on Amethyst would be hilarious but not what I want.  :stuck_out_tongue:
+Anyway, I'm going a little by voodoo at the moment still, so there might be a way to reorder that.  Maybe I should dig into Amethyst... but I"m already dealing with the inner workings of two poorly-documented and in-flux codebases so I don't really want to start trying to figure out a third one.
+FriziToday at 7:06 PM
+ImageState doesn't need NodeId for anything
+you only need queue id and image layout
+ImageState::new
+icefoxToday at 7:07 PM
+queue id might be what I'm thinknig of then...
+let me look at that.
+looks like the main way you get a QueueId is from Graph::node_queue though?
+FriziToday at 7:08 PM
+yeah, that one is a bit tough to be foolproof. Currently i just hardcoded queueid 0 :/
+        let queue_id = QueueId {
+            family: self.families.as_mut().unwrap().family_by_index(0).id(),
+            index: 0,
+        };
+icefoxToday at 7:09 PM
+hmmmm
+FriziToday at 7:09 PM
+where system has families: Option<Families<B>>
+it's not ideal ofc
+but we really only use this queue for everything involving textures anyway
+and there is currently no way of knowing how else it would be used. It's just an assumption that textures loaded as assets are always for queue 0 of family 0
+you can still do a queue transition if needed later, so it's not that big of a deal
+icefoxToday at 7:10 PM
+Aha.
+I will try that then, thank you.
+
+# Outstanding questions
+
+Depth buffer???
+
+Selectable backends
+

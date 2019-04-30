@@ -17,16 +17,6 @@ for example by reifying the geometry in the vertex shader a la the Rendy
 quads example.
  */
 
-//!
-//! The mighty triangle example.
-//! This examples shows colord triangle on white background.
-//! Nothing fancy. Just prove that `rendy` works.
-//!
-
-#![cfg_attr(
-    not(any(feature = "dx12", feature = "metal", feature = "vulkan")),
-    allow(unused)
-)]
 use {
     gfx_hal::PhysicalDevice as _,
     rendy::{
@@ -35,27 +25,41 @@ use {
         graph::{
             present::PresentNode, render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage,
         },
-        hal::Device as _,
         hal as gfx_hal,
+        hal::Device as _,
         memory::Dynamic,
         mesh::{AsVertex, Mesh, PosColorNorm, Transform},
-        resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle},
+        resource::{
+            Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle,
+            SamplerInfo, WrapMode,
+        },
         shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo},
         texture::Texture,
     },
 };
 
-use std::{cmp::min, mem::size_of, time};
-
+use std::{mem::size_of, time};
 
 use rand::distributions::{Distribution, Uniform};
 
 use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
+use euclid;
+
+type Point2 = euclid::Vector2D<f32>;
+type Vector2 = euclid::Vector2D<f32>;
+type Vector3 = euclid::Vector3D<f32>;
+type Transform3 = euclid::Transform3D<f32>;
+type Color = [f32; 4];
+type Rect = euclid::Rect<f32>;
+
 // TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
 // Perhaps.
 // For now though, this is okay if not great.
 // It WOULD be quite nice to be able to play with OpenGL and DX12 backends.
+//
+// TODO: We ALSO need to specify features to rendy to build these, so.  For now we only ever
+// specify Vulkan.
 #[cfg(target_os = "macos")]
 type Backend = rendy::metal::Backend;
 
@@ -80,36 +84,94 @@ lazy_static::lazy_static! {
     ).precompile().unwrap();
 }
 
+/// ggez's input draw params.  This just gets turned into
+/// an InstanceData but it's good to keep in mind what we're
+/// doing here.
 #[derive(Clone, Copy, Debug)]
-#[repr(C, align(16))]
-struct Light {
-    pos: nalgebra::Vector3<f32>,
-    pad: f32,
-    intencity: f32,
+pub struct DrawParam {
+    pub src: Rect,
+    pub dest: Point2,
+    pub rotation: f32,
+    pub scale: Vector2,
+    pub offset: Point2,
+    pub color: Color,
 }
 
+/// Data we need per instance.  DrawParam gets turned into this.
+/// We have to be *quite particular* about layout since this gets
+/// fed straight to the shader.
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug)]
+struct InstanceData {
+    transform: Transform3,
+    src: Rect,
+    color: Color,
+}
+
+/// Uniform data.  Each Scene contains one of these.
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 struct UniformArgs {
-    proj: nalgebra::Matrix4<f32>,
-    view: nalgebra::Matrix4<f32>,
-    lights_count: i32,
-    pad: [i32; 3],
-    lights: [Light; MAX_LIGHTS],
+    proj: Transform3,
+    view: Transform3,
 }
 
+/// Basically UniformArgs
 #[derive(Debug)]
 struct Camera {
-    view: nalgebra::Projective3<f32>,
-    proj: nalgebra::Matrix4<f32>,
+    view: Transform3,
+    proj: Transform3,
 }
 
 #[derive(Debug)]
 struct Scene<B: gfx_hal::Backend> {
     camera: Camera,
-    object_mesh: Option<Mesh<B>>,
-    objects: Vec<nalgebra::Transform3<f32>>,
-    lights: Vec<Light>,
+    object_mesh: Mesh<B>,
+    objects: Vec<InstanceData>,
+    texture: Texture<B>,
+
+    /// We just need the actual config for the sampler 'cause
+    /// Rendy's `Factory` can manage a sampler cache itself.
+    sampler_info: SamplerInfo,
+}
+
+impl<B> Scene<B>
+where
+    B: gfx_hal::Backend,
+{
+    fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng) {
+        let rxy = Uniform::new(-1.0, 1.0);
+        let rxy2 = Uniform::new(0.0, 500.0);
+        let rz = Uniform::new(0.0, 185.0);
+
+        if self.objects.len() < MAX_OBJECTS {
+            let z = rz.sample(rng);
+            let transform =
+                Transform3::create_translation(rxy2.sample(rng), rxy2.sample(rng), -100.0);
+
+            /*
+                 let transform = Transform3::create_translation(
+                    rxy.sample(rng) * (z / 2.0 + 4.0),
+                    rxy.sample(rng) * (z / 2.0 + 4.0),
+                    -z,
+                    );
+            let transform = Transform3::create_translation(
+                rxy.sample(rng) * 1000.0,
+                rxy.sample(rng) * 1000.0,
+                100.0,
+            );
+            */
+            println!("Transform: {:?}", transform);
+            let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
+            let color = [1.0, 0.0, 1.0, 1.0];
+            let instance = InstanceData {
+                transform,
+                src,
+                color,
+            };
+            self.objects.push(instance);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -119,26 +181,25 @@ struct Aux<B: gfx_hal::Backend> {
     scene: Scene<B>,
 }
 
-const MAX_LIGHTS: usize = 32;
 const MAX_OBJECTS: usize = 10_000;
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
-const TRANSFORMS_SIZE: u64 = size_of::<Transform>() as u64 * MAX_OBJECTS as u64;
+const INSTANCES_SIZE: u64 = size_of::<InstanceData>() as u64 * MAX_OBJECTS as u64;
 const INDIRECT_SIZE: u64 = size_of::<DrawIndexedCommand>() as u64;
 
 const fn buffer_frame_size(align: u64) -> u64 {
-    ((UNIFORM_SIZE + TRANSFORMS_SIZE + INDIRECT_SIZE - 1) / align + 1) * align
+    ((UNIFORM_SIZE + INSTANCES_SIZE + INDIRECT_SIZE - 1) / align + 1) * align
 }
 
 const fn uniform_offset(index: usize, align: u64) -> u64 {
     buffer_frame_size(align) * index as u64
 }
 
-const fn transforms_offset(index: usize, align: u64) -> u64 {
+const fn instances_offset(index: usize, align: u64) -> u64 {
     uniform_offset(index, align) + UNIFORM_SIZE
 }
 
 const fn indirect_offset(index: usize, align: u64) -> u64 {
-    transforms_offset(index, align) + TRANSFORMS_SIZE
+    instances_offset(index, align) + INSTANCES_SIZE
 }
 
 #[derive(Debug, Default)]
@@ -146,7 +207,6 @@ struct MeshRenderPipelineDesc;
 
 #[derive(Debug)]
 struct MeshRenderPipeline<B: gfx_hal::Backend> {
-    texture: Texture<B>,
     buffer: Escape<Buffer<B>>,
     sets: Vec<Escape<DescriptorSet<B>>>,
 }
@@ -157,12 +217,9 @@ where
 {
     type Pipeline = MeshRenderPipeline<B>;
 
-
-
     fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
         None
     }
-
 
     fn layout(&self) -> Layout {
         Layout {
@@ -175,7 +232,6 @@ where
                         stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
                         immutable_samplers: false,
                     },
-                    // ADDED
                     gfx_hal::pso::DescriptorSetLayoutBinding {
                         binding: 1,
                         ty: gfx_hal::pso::DescriptorType::SampledImage,
@@ -244,7 +300,7 @@ where
         self,
         _ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
-        queue: QueueId,
+        _queue: QueueId,
         aux: &Aux<B>,
         buffers: Vec<NodeBuffer>,
         images: Vec<NodeImage>,
@@ -268,28 +324,7 @@ where
             )
             .unwrap();
 
-        // This is how we can load an image and create a new texture.
-        let image_bytes = include_bytes!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/data/logo.png"
-        ));
-
-        let texture_builder =
-            rendy::texture::image::load_from_image(image_bytes, Default::default())?;
-
-        let texture = texture_builder
-            .build(
-                ImageState {
-                    queue,
-                    stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
-                    access: gfx_hal::image::Access::SHADER_READ,
-                    layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
-                },
-                factory,
-            )
-            .unwrap();
-
-
+        let sampler = factory.get_sampler(aux.scene.sampler_info.clone())?;
         let mut sets = Vec::new();
         for index in 0..frames {
             unsafe {
@@ -312,7 +347,7 @@ where
                     binding: 1,
                     array_offset: 0,
                     descriptors: vec![gfx_hal::pso::Descriptor::Image(
-                        texture.view().raw(),
+                        aux.scene.texture.view().raw(),
                         gfx_hal::image::Layout::ShaderReadOnlyOptimal,
                     )],
                 }));
@@ -320,14 +355,14 @@ where
                     set: set.raw(),
                     binding: 2,
                     array_offset: 0,
-                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(texture.sampler().raw())],
+                    descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
                 }));
 
                 sets.push(set);
             }
         }
 
-        Ok(MeshRenderPipeline { texture, buffer, sets })
+        Ok(MeshRenderPipeline { buffer, sets })
     }
 }
 
@@ -353,20 +388,8 @@ where
                     &mut self.buffer,
                     uniform_offset(index, align),
                     &[UniformArgs {
-                        pad: [0, 0, 0],
                         proj: scene.camera.proj,
-                        view: scene.camera.view.inverse().to_homogeneous(),
-                        lights_count: scene.lights.len() as i32,
-                        lights: {
-                            let mut array = [Light {
-                                pad: 0.0,
-                                pos: nalgebra::Vector3::new(0.0, 0.0, 0.0),
-                                intencity: 0.0,
-                            }; MAX_LIGHTS];
-                            let count = min(scene.lights.len(), 32);
-                            array[..count].copy_from_slice(&scene.lights[..count]);
-                            array
-                        },
+                        view: scene.camera.view.inverse().unwrap(),
                     }],
                 )
                 .unwrap()
@@ -378,7 +401,7 @@ where
                     &mut self.buffer,
                     indirect_offset(index, align),
                     &[DrawIndexedCommand {
-                        index_count: scene.object_mesh.as_ref().unwrap().len(),
+                        index_count: scene.object_mesh.len(),
                         instance_count: scene.objects.len() as u32,
                         first_index: 0,
                         vertex_offset: 0,
@@ -393,7 +416,7 @@ where
                 factory
                     .upload_visible_buffer(
                         &mut self.buffer,
-                        transforms_offset(index, align),
+                        instances_offset(index, align),
                         &scene.objects[..],
                     )
                     .unwrap()
@@ -416,16 +439,14 @@ where
             Some(self.sets[index].raw()),
             std::iter::empty(),
         );
-        assert!(aux
-            .scene
+        aux.scene
             .object_mesh
-            .as_ref()
-            .unwrap()
             .bind(&[PosColorNorm::VERTEX], &mut encoder)
-            .is_ok());
+            .expect("Could not bind mesh?");
+
         encoder.bind_vertex_buffers(
             1,
-            std::iter::once((self.buffer.raw(), transforms_offset(index, aux.align))),
+            std::iter::once((self.buffer.raw(), instances_offset(index, aux.align))),
         );
         encoder.draw_indexed_indirect(
             self.buffer.raw(),
@@ -438,9 +459,66 @@ where
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
 }
 
-#[cfg(any(feature = "dx12", feature = "metal", feature = "vulkan"))]
-fn main() {
+/// This is how we can load an image and create a new texture.
+fn make_texture<B>(queue_id: QueueId, factory: &mut Factory<B>, image_bytes: &[u8]) -> Texture<B>
+where
+    B: gfx_hal::Backend,
+{
+    let texture_builder = rendy::texture::image::load_from_image(image_bytes, Default::default())
+        .expect("Could not load texture?");
 
+    let texture = texture_builder
+        .build(
+            ImageState {
+                queue: queue_id,
+                stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
+                access: gfx_hal::image::Access::SHADER_READ,
+                layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+            },
+            factory,
+        )
+        .unwrap();
+    texture
+}
+
+fn make_quad_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
+where
+    B: gfx_hal::Backend,
+{
+    let verts: Vec<[f32; 3]> = vec![
+        [0.0, 0.0, 0.0],
+        [0.0, 100.0, 0.0],
+        [100.0, 100.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [100.0, 100.0, 0.0],
+        [100.0, 0.0, 0.0],
+    ];
+    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 3, 4, 5]);
+    let vertices: Vec<_> = verts
+        .into_iter()
+        // TODO: Mesh color... how do we want to handle this?
+        .map(|v| PosColorNorm {
+            position: rendy::mesh::Position::from(v),
+            color: [
+                (v[0] + 1.0) / 2.0,
+                (v[1] + 1.0) / 2.0,
+                (v[2] + 1.0) / 2.0,
+                1.0,
+            ]
+            .into(),
+            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
+        })
+        .collect();
+
+    let m = Mesh::<Backend>::builder()
+        .with_indices(indices)
+        .with_vertices(&vertices[..])
+        .build(queue_id, &factory)
+        .unwrap();
+    m
+}
+
+fn main() {
     let config: Config = Default::default();
 
     let (mut factory, mut families): (Factory<Backend>, _) = rendy::factory::init(config).unwrap();
@@ -451,6 +529,10 @@ fn main() {
         .with_title("Rendy example")
         .build(&event_loop)
         .unwrap();
+    let window_size = window
+        .get_inner_size()
+        .unwrap()
+        .to_physical(window.get_hidpi_factor());
 
     event_loop.poll_events(|_| ());
 
@@ -464,18 +546,18 @@ fn main() {
         1,
         factory.get_surface_format(&surface),
         Some(gfx_hal::command::ClearValue::Color(
-            [1.0, 1.0, 1.0, 1.0].into(),
+            [0.1, 0.2, 0.3, 1.0].into(),
         )),
     );
 
-    let depth = graph_builder.create_image(
-        surface.kind(),
-        1,
-        gfx_hal::format::Format::D16Unorm,
-        Some(gfx_hal::command::ClearValue::DepthStencil(
-            gfx_hal::command::ClearDepthStencil(1.0, 0),
-        )),
-    );
+    // let depth = graph_builder.create_image(
+    //     surface.kind(),
+    //     1,
+    //     gfx_hal::format::Format::D16Unorm,
+    //     Some(gfx_hal::command::ClearValue::DepthStencil(
+    //         gfx_hal::command::ClearDepthStencil(1.0, 0),
+    //     )),
+    // );
 
     let pass = graph_builder.add_node(
         MeshRenderPipeline::builder()
@@ -491,36 +573,46 @@ fn main() {
 
     graph_builder.add_node(present_builder);
 
+    // HACK suggested by Frizi, just use queue 0 for everything
+    // instead of getting it from `graph.node_queue(pass)`.
+    // Since we control in our `Config` what families we have
+    // and what they have, as long as we only ever use one family
+    // (which is probably fine) then we're prooooobably okay with
+    // this.
+    let queue_id = QueueId {
+        family: families.family_by_index(0).id(),
+        index: 0,
+    };
+
+    let rendy_bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/data/rendy_logo.png"
+    ));
+    let gfx_bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/data/gfx_logo.png"
+    ));
+
+    let texture = make_texture(queue_id, &mut factory, rendy_bytes);
+    let _texture2 = make_texture(queue_id, &mut factory, gfx_bytes);
+    let object_mesh = make_quad_mesh(queue_id, &mut factory);
+
+    let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
+    let width = window_size.width as f32;
+    let height = window_size.height as f32;
+    println!("dims: {}x{}", width, height);
     let scene = Scene {
+        // TODO: Make view and proj separate?  Maybe.  We should only need one.
         camera: Camera {
-            // proj: nalgebra::Matrix4::new_perspective(aspect, 3.1415 / 4.0, 1.0, 200.0),
-            proj: nalgebra::Matrix4::new_orthographic(-100.0, 100.0, -100.0, 100.0, 1.0, 200.0),
-            view: nalgebra::Projective3::identity() * nalgebra::Translation3::new(0.0, 0.0, 10.0),
+            proj: Transform3::ortho(0.0, width, height, 0.0, 1.0, 200.0),
+
+            view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
-        object_mesh: None,
         objects: vec![],
-        lights: vec![
-            Light {
-                pad: 0.0,
-                pos: nalgebra::Vector3::new(0.0, 0.0, 0.0),
-                intencity: 10.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: nalgebra::Vector3::new(0.0, 20.0, -20.0),
-                intencity: 140.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: nalgebra::Vector3::new(-20.0, 0.0, -60.0),
-                intencity: 100.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: nalgebra::Vector3::new(20.0, -30.0, -100.0),
-                intencity: 160.0,
-            },
-        ],
+        object_mesh,
+        texture,
+
+        sampler_info,
     };
 
     let mut aux = Aux {
@@ -532,83 +624,17 @@ fn main() {
         scene,
     };
 
-    log::info!("{:#?}", aux.scene);
-
     let mut graph = graph_builder
         .with_frames_in_flight(frames)
         .build(&mut factory, &mut families, &aux)
         .unwrap();
 
-/*
-    let icosphere = genmesh::generators::IcoSphere::subdivide(4);
-    let indices: Vec<_> = genmesh::Vertices::vertices(icosphere.indexed_polygon_iter())
-        .map(|i| i as u32)
-        .collect();
-    let vertices: Vec<_> = icosphere
-        .shared_vertex_iter()
-        .map(|v| PosColorNorm {
-            position: v.pos.into(),
-            color: [
-                (v.pos.x + 1.0) / 2.0,
-                (v.pos.y + 1.0) / 2.0,
-                (v.pos.z + 1.0) / 2.0,
-                1.0,
-            ]
-            .into(),
-            normal: v.normal.into(),
-        })
-        .collect();
-
-    aux.scene.object_mesh = Some(
-        Mesh::<Backend>::builder()
-            .with_indices(&indices[..])
-            .with_vertices(&vertices[..])
-            .build(graph.node_queue(pass), &factory)
-            .unwrap(),
-    );
-    */
-        let verts: Vec<[f32;3]> = vec![
-        [0.0, 0.0, 0.5],
-        [0.0, 10.0, 0.5],
-        [10.0, 10.0, 0.5],
-        [0.0, 0.0, 0.5],
-        [10.0, 10.0, 0.5],
-        [10.0, 0.0, 0.5],
-    ];
-    let indices = rendy::mesh::Indices::from( vec![
-        0u32, 1, 2, 3, 4, 5
-        ]);
-    let vertices: Vec<_> = verts
-        .into_iter()
-        .map(|v| PosColorNorm {
-            position: rendy::mesh::Position::from(v),
-            color: [
-                (v[0] + 1.0) / 2.0,
-                (v[1] + 1.0) / 2.0,
-                (v[2] + 1.0) / 2.0,
-                1.0,
-            ]
-                .into(),
-            // TODO: Double-check this; z goes into screen, right?
-            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0])
-        })
-        .collect();
-
-    aux.scene.object_mesh = Some(
-        Mesh::<Backend>::builder()
-            .with_indices(indices)
-            .with_vertices(&vertices[..])
-            .build(graph.node_queue(pass), &factory)
-            .unwrap(),
-    );
-
+    log::info!("{:#?}", aux.scene);
 
     let started = time::Instant::now();
 
     let mut frames = 0u64..;
     let mut rng = rand::thread_rng();
-    let rxy = Uniform::new(-1.0, 1.0);
-    let rz = Uniform::new(0.0, 185.0);
 
     let mut fpss = Vec::new();
     let mut checkpoint = started;
@@ -629,18 +655,7 @@ fn main() {
             graph.run(&mut factory, &mut families, &aux);
 
             let elapsed = checkpoint.elapsed();
-
-            if aux.scene.objects.len() < MAX_OBJECTS {
-                    let z = rz.sample(&mut rng);
-                    let trans = nalgebra::Transform3::identity()
-                        * nalgebra::Translation3::new(
-                            rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                            rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                            -z,
-                        );
-                        println!("Creating scene object at {:?}", trans);
-                aux.scene.objects.push(trans);
-            }
+            aux.scene.add_object(&mut rng);
 
             if should_close
                 || elapsed > std::time::Duration::new(5, 0)
@@ -661,9 +676,4 @@ fn main() {
     log::info!("FPS: {:#?}", fpss);
 
     graph.dispose(&mut factory, &aux);
-}
-
-#[cfg(not(any(feature = "dx12", feature = "metal", feature = "vulkan")))]
-fn main() {
-    panic!("Specify feature: { dx12, metal, vulkan }");
 }
