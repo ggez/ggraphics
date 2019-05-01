@@ -218,7 +218,7 @@ where
         }
     }
 
-    fn new(factory: &mut Factory<B>, align: u64) -> Self {
+    fn new(factory: &mut Factory<B>, align: u64, draw_calls: &[DrawCall<B>], descriptor_set: &Handle<DescriptorSetLayout<B>>) -> Self {
         let buffer = factory
             .create_buffer(
                 BufferInfo {
@@ -232,11 +232,18 @@ where
             .unwrap();
 
         let descriptor_sets = vec![];
-        Self {
+        let mut ret = Self {
             buffer,
             descriptor_sets,
             draw_offsets: vec![],
+        };
+        let layout = Self::LAYOUT;
+        for draw_call in draw_calls {
+            // all descriptor sets use the same layout
+            // we need one per draw call, per frame in flight.
+            ret.write_descriptor_sets(factory, draw_call, descriptor_set, align);
         }
+        ret
     }
 
     /// Takes a draw call and creates a descriptor set that points
@@ -525,8 +532,8 @@ struct MeshRenderPipelineDesc;
 
 #[derive(Debug)]
 struct MeshRenderPipeline<B: gfx_hal::Backend> {
-    buffer: Escape<Buffer<B>>,
-    sets: Vec<Escape<DescriptorSet<B>>>,
+    // buffer: Escape<Buffer<B>>,
+    // sets: Vec<Escape<DescriptorSet<B>>>,
 
     frames_in_flight: Vec<FrameInFlight<B>>,
 }
@@ -659,7 +666,7 @@ where
         assert_eq!(set_layouts.len(), 2);
 
         let (frames, align) = (aux.frames, aux.align);
-
+/*
         let buffer = factory
             .create_buffer(
                 BufferInfo {
@@ -671,6 +678,7 @@ where
                 Dynamic,
             )
             .unwrap();
+
 
         let sampler = factory.get_sampler(aux.scene.sampler_info.clone())?;
         let mut sets = Vec::new();
@@ -746,11 +754,18 @@ where
             }
         }
 
+*/
+    // Okay, so, each `FrameInFlight` needs one descriptor set per draw call.
+
 
     let mut frames_in_flight = vec![];
-    frames_in_flight.extend((0..frames).map(|_| FrameInFlight::new(factory, align)));
+    frames_in_flight.extend((0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])));
 
-        Ok(MeshRenderPipeline { buffer, sets, frames_in_flight, })
+        Ok(MeshRenderPipeline { 
+            //buffer, 
+            // sets, 
+            frames_in_flight, 
+        })
     }
 }
 
@@ -771,9 +786,9 @@ where
         let (scene, align) = (&aux.scene, aux.align);
 
         // TODO: Fix this
-        // let layout = &set_layouts[0];
-        // aux.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
-
+        let layout = &set_layouts[0];
+        self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
+/*
         unsafe {
             factory
                 .upload_visible_buffer(
@@ -824,7 +839,7 @@ where
                     .unwrap()
             };
         }
-
+*/
         PrepareResult::DrawReuse
     }
 
@@ -835,6 +850,8 @@ where
         index: usize,
         aux: &Aux<B>,
     ) {
+        self.frames_in_flight[index].draw(&aux.draws, layout, &mut encoder, aux.align);
+        /*
         let descriptor_set1 = vec![self.sets[0].raw()];
         let descriptor_set2 = vec![self.sets[3].raw()];
         let vertex_buffers = vec![
@@ -882,6 +899,7 @@ where
             1,
             INDIRECT_SIZE as u32,
         );
+        */
     }
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
