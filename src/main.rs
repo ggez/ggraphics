@@ -418,8 +418,7 @@ where
             let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
             let color = [1.0, 0.0, 1.0, 1.0];
             let instance = InstanceData {
-                // TODO: Is column major correct?  I THINK so.
-                transform: transform.to_column_major_array(),
+                transform: transform.to_row_major_array(),
                 src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
                 color,
             };
