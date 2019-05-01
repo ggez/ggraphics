@@ -90,11 +90,63 @@ lazy_static::lazy_static! {
 ///
 /// TODO: Currently the shader doesn't use src or color though.
 #[repr(C, align(16))]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 struct InstanceData {
-    transform: Transform3,
-    src: Rect,
-    color: Color,
+    // These don't impl PartialOrd and PartialEq so
+    // we have to use the lower-level forms for
+    // actually sending to the GPU...?
+    //transform: Transform3,
+    //src: Rect,
+    //color: Color,
+    
+    transform: [f32;16],
+    src: [f32;4],
+    color: [f32;4],
+}
+
+use rendy::mesh::{Attribute, VertexFormat};
+use std::borrow::Cow;
+
+/// Okay, this tripped me up.  Instance data is technically
+/// part of the per-vertex data.  So we describe it as
+/// part of the vertex format.  This is where that
+/// definition happens.
+///
+/// This trait impl is basically extended from the impl for
+/// `rendy::mesh::Transform`
+impl AsVertex for InstanceData {
+    const VERTEX: VertexFormat<'static> =  VertexFormat {
+        attributes: Cow::Borrowed(&[
+            // transform as a `[vec4;4]`
+            Attribute {
+                format: gfx_hal::format::Format::Rgba32Float,
+                offset: 0,
+            },
+            Attribute {
+                format: gfx_hal::format::Format::Rgba32Float,
+                offset: 16,
+            },
+            Attribute {
+                format: gfx_hal::format::Format::Rgba32Float,
+                offset: 32,
+            },
+            Attribute {
+                format: gfx_hal::format::Format::Rgba32Float,
+                offset: 48,
+            },
+            // rect
+            Attribute {
+                format: gfx_hal::format::Format::Rgba32Float,
+                offset: 64,
+            },
+            // color
+            Attribute {
+                format: gfx_hal::format::Format::Rgba32Float,
+                offset: 80,
+            },
+        ]),
+        stride: 96,
+};
 }
 
 /// Uniform data.  Each Scene contains one of these.
@@ -270,9 +322,6 @@ where
     }
 
     /// Draws a list of DrawCall's.
-    ///
-    /// TODO: Okay I need to stop here because my brain is melting
-    /// and I'm probably misunderstanding stuff.
     fn draw(
         &mut self,
         draw_calls: &[DrawCall<B>],
@@ -291,7 +340,13 @@ where
                 .bind(&[PosColorNorm::VERTEX], encoder)
                 .expect("Could not bind mesh?");
 
-            // TODO: Thiiiiis does not seem right, investigate.
+            // This is a bit weird, but basically tells the thing where to find the
+            // instance data.  The stride and such of the instance structure is
+            // defined in the `AsVertex` definition.
+            //
+            // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
+            // to differentiate which *place* we're binding to; see the 0 in the
+            // bind_graphics_descriptor_sets().
             encoder.bind_vertex_buffers(
                 1,
                 std::iter::once((self.buffer.raw(), ginstance_offset(instances_count))),
@@ -305,13 +360,10 @@ where
             // The index count is wrong...?
             // Maybe not.  See https://github.com/amethyst/rendy/issues/119
             let indices = 0..(draw_call.mesh.len() as u32);
-            // THIS count also seems very suspicious.  How does it know how big
-            // an instance is???
-            // But vkCmdDrawIndexed is similar...
-            // ???or where to start drawing in the buffer???
-            // It's not in the descriptor sets...
-            // TODO: It's in the vertex format because apparently instances
-            // are bundled up with per-vertex data.  AUGH.  Whew.  FIX.
+            // This count is the *number of instances*.  What instance
+            // to start at in the buffer is defined by the offset in
+            // `bind_vertex_buffers()` above, and the stride/size of an instance
+            // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
             encoder.draw_indexed(indices, 0, instances);
         }
@@ -366,8 +418,9 @@ where
             let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
             let color = [1.0, 0.0, 1.0, 1.0];
             let instance = InstanceData {
-                transform,
-                src,
+                // TODO: Is column major correct?  I THINK so.
+                transform: transform.to_column_major_array(),
+                src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
                 color,
             };
             self.objects.push(instance);
@@ -415,7 +468,9 @@ const fn indirect_offset(index: usize, align: u64) -> u64 {
 ///
 /// Right now we have a fixed size buffer and just limit the number
 /// of objects in it.  TODO: Eventually someday we will grow the buffer
-/// as needed.
+/// as needed.  Maybe shrink it too?  Not sure about that.
+/// ALSO TODO: Would probably be nicer to stick the uniforms into
+/// push constants someday, but one thing at a time.
 const fn gbuffer_size(align: u64) -> u64 {
     ((UNIFORM_SIZE + INSTANCES_SIZE - 1) / align + 1) * align
 }
@@ -430,7 +485,7 @@ const fn guniform_offset() -> u64 {
 ///
 /// TODO: Are there alignment requirements for this?
 const fn ginstance_offset(instance_count: usize) -> u64 {
-    UNIFORM_SIZE + (instance_count * size_of::<InstanceData>()) as u64
+    guniform_offset() + (instance_count * size_of::<InstanceData>()) as u64
 }
 
 #[derive(Debug, Default)]
@@ -519,10 +574,7 @@ where
     )> {
         vec![
             PosColorNorm::VERTEX.gfx_vertex_input_desc(0),
-            // TODO: THIS IS PROBABLY WHERE INSTANCE PROPERTY STUFF GETS SET.
-            // Explains why things were broken with vertex attributes like color,
-            // I suspect.  Fix!
-            Transform::VERTEX.gfx_vertex_input_desc(1),
+            InstanceData::VERTEX.gfx_vertex_input_desc(1),
         ]
     }
 
