@@ -245,9 +245,9 @@ where
     /// For now we do not care about reusing descriptor sets.
     /// They all have the same layout though, so should be easy
     /// eventually, but for now meh.
-    fn add_descriptor_sets(
+    fn write_descriptor_sets(
         &mut self,
-        factory: &mut Factory<B>,
+        factory: &Factory<B>,
         draw_call: &DrawCall<B>,
         layout: &Handle<DescriptorSetLayout<B>>,
         align: u64,
@@ -291,7 +291,7 @@ where
     /// care of uploading EACH of them into the buffer so they don't clash!
     fn prepare(
         &mut self,
-        factory: &mut Factory<B>,
+        factory: &Factory<B>,
         uniforms: &UniformData,
         draw_calls: &[DrawCall<B>],
         layout: &Handle<DescriptorSetLayout<B>>,
@@ -304,7 +304,7 @@ where
                 .unwrap();
 
             for draw_call in draw_calls {
-                self.add_descriptor_sets(factory, draw_call, layout, align);
+                self.write_descriptor_sets(factory, draw_call, layout, align);
 
                 // Upload the instances to the right offset in the
                 // buffer.
@@ -463,7 +463,6 @@ struct Aux<B: gfx_hal::Backend> {
     align: u64,
     scene: Scene<B>,
 
-    frames_in_flight: Vec<FrameInFlight<B>>,
     draws: Vec<DrawCall<B>>,
     camera: UniformData,
 }
@@ -528,6 +527,8 @@ struct MeshRenderPipelineDesc;
 struct MeshRenderPipeline<B: gfx_hal::Backend> {
     buffer: Escape<Buffer<B>>,
     sets: Vec<Escape<DescriptorSet<B>>>,
+
+    frames_in_flight: Vec<FrameInFlight<B>>,
 }
 
 impl<B> SimpleGraphicsPipelineDesc<B, Aux<B>> for MeshRenderPipelineDesc
@@ -541,6 +542,7 @@ where
     }
 
     fn layout(&self) -> Layout {
+        // TODO: Figure this stuff out.
         Layout {
             sets: vec![
                 SetLayout {
@@ -744,7 +746,11 @@ where
             }
         }
 
-        Ok(MeshRenderPipeline { buffer, sets })
+
+    let mut frames_in_flight = vec![];
+    frames_in_flight.extend((0..frames).map(|_| FrameInFlight::new(factory, align)));
+
+        Ok(MeshRenderPipeline { buffer, sets, frames_in_flight, })
     }
 }
 
@@ -758,11 +764,15 @@ where
         &mut self,
         factory: &Factory<B>,
         _queue: QueueId,
-        _set_layouts: &[Handle<DescriptorSetLayout<B>>],
+        set_layouts: &[Handle<DescriptorSetLayout<B>>],
         index: usize,
         aux: &Aux<B>,
     ) -> PrepareResult {
         let (scene, align) = (&aux.scene, aux.align);
+
+        // TODO: Fix this
+        // let layout = &set_layouts[0];
+        // aux.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
 
         unsafe {
             factory
@@ -1045,8 +1055,6 @@ fn main() {
             .limits()
             .min_uniform_buffer_offset_alignment;
 
-    let mut frames_in_flight = vec![];
-    frames_in_flight.extend((0..frames).map(|_| FrameInFlight::new(&mut factory, align)));
     let draws = vec![
         DrawCall::new(texture1, object_mesh1),
         DrawCall::new(texture2, object_mesh2),
@@ -1056,7 +1064,6 @@ fn main() {
         align,
         scene,
 
-        frames_in_flight,
         draws,
         camera: UniformData {
             proj: Transform3::ortho(0.0, width, height, 0.0, 1.0, 200.0),
