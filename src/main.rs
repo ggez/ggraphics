@@ -98,7 +98,7 @@ struct InstanceData {
     //transform: Transform3,
     //src: Rect,
     //color: Color,
-    
+
     transform: [f32;16],
     src: [f32;4],
     color: [f32;4],
@@ -391,6 +391,36 @@ where
     sampler_info: SamplerInfo,
 }
 
+impl<B> DrawCall<B>
+where
+    B: gfx_hal::Backend,
+{
+    fn new(texture: Texture<B>, mesh: Mesh<B>) -> Self {
+        let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
+        Self {
+            objects: vec![],
+            mesh,
+            texture,
+            sampler_info,
+        }
+    }
+
+    fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng, max_width: f32, max_height: f32) {
+        let rx = Uniform::new(0.0, max_width);
+        let ry = Uniform::new(0.0, max_height);
+        let transform = Transform3::create_translation(rx.sample(rng), ry.sample(rng), -100.0);
+        let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
+        let color = [1.0, 0.0, 1.0, 1.0];
+        let instance = InstanceData {
+            transform: transform.to_row_major_array(),
+            src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
+            color,
+        };
+        self.objects.push(instance);
+
+    }
+}
+
 #[derive(Debug)]
 struct Scene<B: gfx_hal::Backend> {
     camera: UniformData,
@@ -432,6 +462,10 @@ struct Aux<B: gfx_hal::Backend> {
     frames: usize,
     align: u64,
     scene: Scene<B>,
+
+    frames_in_flight: Vec<FrameInFlight<B>>,
+    draws: Vec<DrawCall<B>>,
+    camera: UniformData,
 }
 
 const MAX_OBJECTS: usize = 10_000;
@@ -808,7 +842,6 @@ where
             // std::iter::once((self.buffer.raw(), instances_offset(index, aux.align))),
             vertex_buffers.into_iter(),
         );
-        println!("Index is {}", index);
         encoder.bind_graphics_descriptor_sets(
             layout,
             0,
@@ -977,9 +1010,9 @@ fn main() {
         "/src/data/gfx_logo.png"
     ));
 
-    let texture = make_texture(queue_id, &mut factory, gfx_bytes);
-    let texture2 = make_texture(queue_id, &mut factory, rendy_bytes);
-    let object_mesh = make_quad_mesh(queue_id, &mut factory);
+    let texture_1 = make_texture(queue_id, &mut factory, gfx_bytes);
+    let texture_2 = make_texture(queue_id, &mut factory, rendy_bytes);
+    let object_mesh1 = make_quad_mesh(queue_id, &mut factory);
 
     let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
     let width = window_size.width as f32;
@@ -993,20 +1026,43 @@ fn main() {
             view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
         objects: vec![],
-        object_mesh,
-        texture,
-        texture2,
+        object_mesh: object_mesh1,
+        texture: texture_1,
+        texture2: texture_2,
 
         sampler_info,
     };
 
-    let mut aux = Aux {
-        frames: frames as _,
-        align: factory
+
+    let texture1 = make_texture(queue_id, &mut factory, gfx_bytes);
+    let texture2 = make_texture(queue_id, &mut factory, rendy_bytes);
+    let object_mesh1 = make_quad_mesh(queue_id, &mut factory);
+    // TODO: We should be able to share these, investigate further.
+    let object_mesh2 = make_quad_mesh(queue_id, &mut factory);
+
+    let align = factory
             .physical()
             .limits()
-            .min_uniform_buffer_offset_alignment,
+            .min_uniform_buffer_offset_alignment;
+
+    let mut frames_in_flight = vec![];
+    frames_in_flight.extend((0..frames).map(|_| FrameInFlight::new(&mut factory, align)));
+    let draws = vec![
+        DrawCall::new(texture1, object_mesh1),
+        DrawCall::new(texture2, object_mesh2),
+    ];
+    let mut aux = Aux {
+        frames: frames as _,
+        align,
         scene,
+
+        frames_in_flight,
+        draws,
+        camera: UniformData {
+            proj: Transform3::ortho(0.0, width, height, 0.0, 1.0, 200.0),
+
+            view: Transform3::create_translation(0.0, 0.0, 10.0),
+        },
     };
 
     let mut graph = graph_builder
@@ -1040,7 +1096,9 @@ fn main() {
             graph.run(&mut factory, &mut families, &aux);
 
             let elapsed = checkpoint.elapsed();
-            aux.scene.add_object(&mut rng, width, height);
+            // aux.scene.add_object(&mut rng, width, height);
+            aux.draws[0].add_object(&mut rng, width, height);
+            aux.draws[1].add_object(&mut rng, width, height);
 
             if should_close
                 || elapsed > std::time::Duration::new(5, 0)
