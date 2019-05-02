@@ -559,7 +559,7 @@ where
     ) -> Result<MeshRenderPipeline<B>, failure::Error> {
         assert!(buffers.is_empty());
         assert!(images.is_empty());
-        assert_eq!(set_layouts.len(), 2);
+        assert_eq!(set_layouts.len(), 1);
 
         let (frames, align) = (aux.frames, aux.align);
 
