@@ -341,12 +341,14 @@ where
         encoder: &mut RenderPassEncoder<'_, B>,
         _align: u64,
     ) {
-        for ((draw_call, descriptor_set), draw_offset) in draw_calls
+        println!("Drawing {} draw calls", draw_calls.len());
+        let mut instance_count = 0;
+        for ((draw_call, descriptor_set), _draw_offset) in draw_calls
             .iter()
             .zip(&self.descriptor_sets)
             .zip(&self.draw_offsets)
         {
-            println!("Drawing {:#?}, {:#?}, {}", draw_call, descriptor_set, draw_offset);
+            //println!("Drawing {:#?}, {:#?}, {}", draw_call, descriptor_set, draw_offset);
             // This is a bit weird, but basically tells the thing where to find the
             // instance data.  The stride and such of the instance structure is
             // defined in the `AsVertex` definition.
@@ -367,7 +369,7 @@ where
 
             encoder.bind_vertex_buffers(
                 1,
-                std::iter::once((self.buffer.raw(), ginstance_offset(*draw_offset as usize))),
+                std::iter::once((self.buffer.raw(), ginstance_offset(instance_count))),
             );
             // The index count is wrong...?
             // Maybe not.  See https://github.com/amethyst/rendy/issues/119
@@ -377,7 +379,9 @@ where
             // `bind_vertex_buffers()` above, and the stride/size of an instance
             // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
+            println!("Drawing instances {:?} starting from {}", instances, ginstance_offset(instance_count));
             encoder.draw_indexed(indices, 0, instances);
+            instance_count += draw_call.objects.len();
         }
     }
 }
@@ -596,7 +600,14 @@ where
 
         let layout = &set_layouts[0];
         self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
-        PrepareResult::DrawReuse
+        // TODO: Investigate this more...
+        // Ooooooh in the example it always used the same draw command buffer 'cause it
+        // always did indirect drawing, and just modified the draw command in the data buffer.
+        // we're doing direct drawing now so we have to always re-record our drawing
+        // command buffers when they change -- and the number of instances always changes
+        // in this program, so!
+        //PrepareResult::DrawReuse
+        PrepareResult::DrawRecord
     }
 
     fn draw(
