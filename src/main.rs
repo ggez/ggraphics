@@ -304,7 +304,10 @@ where
         _layout: &Handle<DescriptorSetLayout<B>>,
         _align: u64,
     ) {
+        assert!(draw_calls.len() > 0);
         let mut instance_count = 0;
+        println!("Preparing frame-in-flight, {} draw calls, first has {} instances.", draw_calls.len(),
+        draw_calls[0].objects.len());
         unsafe {
             factory
                 .upload_visible_buffer(&mut self.buffer, guniform_offset(), &[uniforms.clone()])
@@ -314,6 +317,7 @@ where
                 // Upload the instances to the right offset in the
                 // buffer.
                 // Vulkan doesn't seem to like zero-size copies.
+                println!("Uploading {} instance data to {}", draw_call.objects.len(), ginstance_offset(instance_count));
                 if draw_call.objects.len() > 0 {
                     factory
                         .upload_visible_buffer(
@@ -342,6 +346,7 @@ where
             .zip(&self.descriptor_sets)
             .zip(&self.draw_offsets)
         {
+            println!("Drawing {:#?}, {:#?}, {}", draw_call, descriptor_set, draw_offset);
             // This is a bit weird, but basically tells the thing where to find the
             // instance data.  The stride and such of the instance structure is
             // defined in the `AsVertex` definition.
@@ -417,7 +422,7 @@ where
         let ry = Uniform::new(0.0, max_height);
         let x = rx.sample(rng);
         let y = ry.sample(rng);
-        println!("Adding object at {}x{}", x, y);
+        //println!("Adding object at {}x{}", x, y);
         let transform = Transform3::create_translation(x, y, -100.0);
         let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
         let color = [1.0, 0.0, 1.0, 1.0];
@@ -472,7 +477,7 @@ const fn guniform_offset() -> u64 {
 ///
 /// TODO: Are there alignment requirements for this?
 const fn ginstance_offset(instance_count: usize) -> u64 {
-    guniform_offset() + (instance_count * size_of::<InstanceData>()) as u64
+    guniform_offset() + UNIFORM_SIZE + (instance_count * size_of::<InstanceData>()) as u64
 }
 
 #[derive(Debug, Default)]

@@ -18,10 +18,8 @@ layout(set = 0, binding = 2) uniform sampler colorsampler;
 
 
 void main() {
-    float acc = 0.0;
-
     vec3 frag_pos = in_pos.xyz / in_pos.w;
 
-    color = texture(sampler2D(colortex, colorsampler), uv.xy) * frag_color;
-    //color = vec4(0,0,0,1);
+    //color = texture(sampler2D(colortex, colorsampler), uv.xy) * frag_color;
+    color = vec4(0,0,0,1);
 }
