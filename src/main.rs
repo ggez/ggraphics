@@ -217,10 +217,11 @@ where
         draw_calls: &[DrawCall<B>],
         descriptor_set: &Handle<DescriptorSetLayout<B>>,
     ) -> Self {
+        let buffer_size = gbuffer_size(align) * (draw_calls.len() as u64);
         let buffer = factory
             .create_buffer(
                 BufferInfo {
-                    size: gbuffer_size(align),
+                    size: buffer_size,
                     usage: gfx_hal::buffer::Usage::UNIFORM
                         // TODO: Can INDIRECT be removed?
                         | gfx_hal::buffer::Usage::INDIRECT
@@ -306,8 +307,8 @@ where
     ) {
         assert!(draw_calls.len() > 0);
         let mut instance_count = 0;
-        println!("Preparing frame-in-flight, {} draw calls, first has {} instances.", draw_calls.len(),
-        draw_calls[0].objects.len());
+        //println!("Preparing frame-in-flight, {} draw calls, first has {} instances.", draw_calls.len(),
+        //draw_calls[0].objects.len());
         unsafe {
             factory
                 .upload_visible_buffer(&mut self.buffer, guniform_offset(), &[uniforms.clone()])
@@ -317,7 +318,7 @@ where
                 // Upload the instances to the right offset in the
                 // buffer.
                 // Vulkan doesn't seem to like zero-size copies.
-                println!("Uploading {} instance data to {}", draw_call.objects.len(), ginstance_offset(instance_count));
+                //println!("Uploading {} instance data to {}", draw_call.objects.len(), ginstance_offset(instance_count));
                 if draw_call.objects.len() > 0 {
                     factory
                         .upload_visible_buffer(
@@ -341,7 +342,7 @@ where
         encoder: &mut RenderPassEncoder<'_, B>,
         _align: u64,
     ) {
-        println!("Drawing {} draw calls", draw_calls.len());
+        //println!("Drawing {} draw calls", draw_calls.len());
         let mut instance_count = 0;
         for ((draw_call, descriptor_set), _draw_offset) in draw_calls
             .iter()
@@ -379,7 +380,7 @@ where
             // `bind_vertex_buffers()` above, and the stride/size of an instance
             // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
-            println!("Drawing instances {:?} starting from {}", instances, ginstance_offset(instance_count));
+            //println!("Drawing instances {:?} starting from {}", instances, ginstance_offset(instance_count));
             encoder.draw_indexed(indices, 0, instances);
             instance_count += draw_call.objects.len();
         }
@@ -422,20 +423,22 @@ where
     }
 
     fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng, max_width: f32, max_height: f32) {
-        let rx = Uniform::new(0.0, max_width);
-        let ry = Uniform::new(0.0, max_height);
-        let x = rx.sample(rng);
-        let y = ry.sample(rng);
-        //println!("Adding object at {}x{}", x, y);
-        let transform = Transform3::create_translation(x, y, -100.0);
-        let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
-        let color = [1.0, 0.0, 1.0, 1.0];
-        let instance = InstanceData {
-            transform: transform.to_row_major_array(),
-            src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
-            color,
-        };
-        self.objects.push(instance);
+        if self.objects.len() < MAX_OBJECTS {
+            let rx = Uniform::new(0.0, max_width);
+            let ry = Uniform::new(0.0, max_height);
+            let x = rx.sample(rng);
+            let y = ry.sample(rng);
+            //println!("Adding object at {}x{}", x, y);
+            let transform = Transform3::create_translation(x, y, -100.0);
+            let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
+            let color = [1.0, 0.0, 1.0, 1.0];
+            let instance = InstanceData {
+                transform: transform.to_row_major_array(),
+                src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
+                color,
+            };
+            self.objects.push(instance);
+        }
     }
 }
 
@@ -803,17 +806,24 @@ fn main() {
         .build(&mut factory, &mut families, &aux)
         .unwrap();
 
-    let started = time::Instant::now();
 
     let mut frames = 0u64..;
     let mut rng = rand::thread_rng();
 
-    let mut checkpoint = started;
     let mut should_close = false;
+    println!("Adding objects...");
+    for draw_call in &mut aux.draws {
+        for _ in 0..MAX_OBJECTS {
+            draw_call.add_object(&mut rng, width, height); 
+        }
+    }
+    println!("Objects added.");
 
+
+    let started = time::Instant::now();
     // TODO: Someday actually check against MAX_OBJECTS
     while !should_close {
-        for _ in &mut frames {
+        for i in &mut frames {
             factory.maintain(&mut families);
             event_loop.poll_events(|event| match event {
                 Event::WindowEvent {
@@ -824,17 +834,16 @@ fn main() {
             });
             graph.run(&mut factory, &mut families, &aux);
 
-            let elapsed = checkpoint.elapsed();
-            for draw_call in &mut aux.draws {
-                draw_call.add_object(&mut rng, width, height); 
-            }
-
-            if should_close || elapsed > std::time::Duration::new(5, 0) {
-                checkpoint += elapsed;
+            if should_close {
                 break;
             }
         }
     }
+    let finished = time::Instant::now();
+    let dt = finished - started;
+    let millis = dt.as_millis() as f64;
+    let fps = frames.start as f64 / (millis / 1000.0);
+    println!("{} frames over {} seconds; {} fps", frames.start, millis / 1000.0, fps);
 
     graph.dispose(&mut factory, &aux);
 }
