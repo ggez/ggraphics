@@ -241,7 +241,7 @@ where
         for draw_call in draw_calls {
             // all descriptor sets use the same layout
             // we need one per draw call, per frame in flight.
-            ret.write_descriptor_sets(factory, draw_call, descriptor_set, align);
+            ret.create_descriptor_sets(factory, draw_call, descriptor_set, align);
         }
         ret
     }
@@ -252,13 +252,14 @@ where
     /// For now we do not care about reusing descriptor sets.
     /// They all have the same layout though, so should be easy
     /// eventually, but for now meh.
-    fn write_descriptor_sets(
+    fn create_descriptor_sets(
         &mut self,
         factory: &Factory<B>,
         draw_call: &DrawCall<B>,
         layout: &Handle<DescriptorSetLayout<B>>,
         align: u64,
     ) {
+        // TODO: Does this sampler need to stay alive?
         let sampler = factory
             .get_sampler(draw_call.sampler_info.clone())
             .expect("Could not get sampler");
@@ -311,19 +312,21 @@ where
                 .unwrap();
 
             for draw_call in draw_calls {
-                self.write_descriptor_sets(factory, draw_call, layout, align);
 
                 // Upload the instances to the right offset in the
                 // buffer.
-                factory
-                    .upload_visible_buffer(
-                        &mut self.buffer,
-                        ginstance_offset(instance_count),
-                        &draw_call.objects[..],
-                    )
-                    .unwrap();
-                self.draw_offsets.push(ginstance_offset(instance_count));
-                instance_count += draw_call.objects.len();
+                // Vulkan doesn't seem to like zero-size copies.
+                if draw_call.objects.len() > 0 {
+                    factory
+                        .upload_visible_buffer(
+                            &mut self.buffer,
+                            ginstance_offset(instance_count),
+                            &draw_call.objects[..],
+                        )
+                        .unwrap();
+                    self.draw_offsets.push(ginstance_offset(instance_count));
+                    instance_count += draw_call.objects.len();
+                }
             }
         }
     }
@@ -354,15 +357,15 @@ where
             // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
             // to differentiate which *place* we're binding to; see the 0 in the
             // bind_graphics_descriptor_sets().
-            encoder.bind_vertex_buffers(
-                1,
-                std::iter::once((self.buffer.raw(), ginstance_offset(instances_count))),
-            );
             encoder.bind_graphics_descriptor_sets(
                 layout,
                 0,
                 std::iter::once(descriptor_set.raw()),
                 std::iter::empty(),
+            );
+            encoder.bind_vertex_buffers(
+                1,
+                std::iter::once((self.buffer.raw(), ginstance_offset(instances_count))),
             );
             // The index count is wrong...?
             // Maybe not.  See https://github.com/amethyst/rendy/issues/119
@@ -415,7 +418,10 @@ where
     fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng, max_width: f32, max_height: f32) {
         let rx = Uniform::new(0.0, max_width);
         let ry = Uniform::new(0.0, max_height);
-        let transform = Transform3::create_translation(rx.sample(rng), ry.sample(rng), -100.0);
+        let x = rx.sample(rng);
+        let y = ry.sample(rng);
+        println!("Adding object at {}x{}", x, y);
+        let transform = Transform3::create_translation(x, y, -100.0);
         let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
         let color = [1.0, 0.0, 1.0, 1.0];
         let instance = InstanceData {
@@ -785,7 +791,6 @@ where
     ) -> PrepareResult {
         let (scene, align) = (&aux.scene, aux.align);
 
-        // TODO: Fix this
         let layout = &set_layouts[0];
         self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
 /*
