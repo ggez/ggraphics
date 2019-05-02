@@ -752,6 +752,14 @@ fn main() {
         env!("CARGO_MANIFEST_DIR"),
         "/src/data/gfx_logo.png"
     ));
+    let rust_bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/data/rust_logo.png"
+    ));
+    let heart_bytes = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/data/heart.png"
+    ));
 
     let width = window_size.width as f32;
     let height = window_size.height as f32;
@@ -759,9 +767,13 @@ fn main() {
 
     let texture1 = make_texture(queue_id, &mut factory, gfx_bytes);
     let texture2 = make_texture(queue_id, &mut factory, rendy_bytes);
+    let texture3 = make_texture(queue_id, &mut factory, rust_bytes);
+    let texture4 = make_texture(queue_id, &mut factory, heart_bytes);
     let object_mesh1 = make_quad_mesh(queue_id, &mut factory);
     // TODO: We should be able to share these, investigate further.
     let object_mesh2 = make_quad_mesh(queue_id, &mut factory);
+    let object_mesh3 = make_quad_mesh(queue_id, &mut factory);
+    let object_mesh4 = make_quad_mesh(queue_id, &mut factory);
 
     let align = factory
         .physical()
@@ -771,6 +783,8 @@ fn main() {
     let draws = vec![
         DrawCall::new(texture1, object_mesh1),
         DrawCall::new(texture2, object_mesh2),
+        DrawCall::new(texture3, object_mesh3),
+        DrawCall::new(texture4, object_mesh4),
     ];
     let mut aux = Aux {
         frames: frames as _,
@@ -811,8 +825,9 @@ fn main() {
             graph.run(&mut factory, &mut families, &aux);
 
             let elapsed = checkpoint.elapsed();
-            aux.draws[0].add_object(&mut rng, width, height);
-            aux.draws[1].add_object(&mut rng, width, height);
+            for draw_call in &mut aux.draws {
+                draw_call.add_object(&mut rng, width, height); 
+            }
 
             if should_close || elapsed > std::time::Duration::new(5, 0) {
                 checkpoint += elapsed;
