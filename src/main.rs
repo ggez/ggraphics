@@ -17,40 +17,35 @@ for example by reifying the geometry in the vertex shader a la the Rendy
 quads example.
  */
 
-use {
-    gfx_hal::PhysicalDevice as _,
-    rendy::{
-        command::{DrawIndexedCommand, QueueId, RenderPassEncoder},
-        factory::{Config, Factory, ImageState},
-        graph::{
-            present::PresentNode, render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage,
-        },
-        hal as gfx_hal,
-        hal::Device as _,
-        memory::Dynamic,
-        mesh::{AsVertex, Mesh, PosColorNorm, Transform},
-        resource::{
-            Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle,
-            SamplerInfo, WrapMode,
-        },
-        shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo},
-        texture::Texture,
-    },
-};
-
 use std::{mem::size_of, time};
 
-use rand::distributions::{Distribution, Uniform};
+use gfx_hal::PhysicalDevice as _;
+use rendy::command::{QueueId, RenderPassEncoder};
+use rendy::factory::{Config, Factory, ImageState};
+use rendy::graph::{
+    present::PresentNode, render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage,
+};
+use rendy::hal as gfx_hal;
+use rendy::hal::Device as _;
+use rendy::memory::Dynamic;
+use rendy::mesh::{AsVertex, Mesh, PosColorNorm};
+use rendy::resource::{
+    Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
+    WrapMode,
+};
+use rendy::shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo};
+use rendy::texture::Texture;
 
+use rand::distributions::{Distribution, Uniform};
 use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
 use euclid;
 
-type Point2 = euclid::Vector2D<f32>;
-type Vector2 = euclid::Vector2D<f32>;
-type Vector3 = euclid::Vector3D<f32>;
+//type Point2 = euclid::Vector2D<f32>;
+//type Vector2 = euclid::Vector2D<f32>;
+//type Vector3 = euclid::Vector3D<f32>;
 type Transform3 = euclid::Transform3D<f32>;
-type Color = [f32; 4];
+//type Color = [f32; 4];
 type Rect = euclid::Rect<f32>;
 
 // TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
@@ -58,8 +53,8 @@ type Rect = euclid::Rect<f32>;
 // For now though, this is okay if not great.
 // It WOULD be quite nice to be able to play with OpenGL and DX12 backends.
 //
-// TODO: We ALSO need to specify features to rendy to build these, so.  For now we only ever
-// specify Vulkan.
+// TODO: We ALSO need to specify features to rendy to build these, so this doesn't even work currently.
+// For now we only ever specify Vulkan.
 #[cfg(target_os = "macos")]
 type Backend = rendy::metal::Backend;
 
@@ -92,16 +87,12 @@ lazy_static::lazy_static! {
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 struct InstanceData {
-    // These don't impl PartialOrd and PartialEq so
+    // The euclid types don't impl PartialOrd and PartialEq so
     // we have to use the lower-level forms for
-    // actually sending to the GPU...?
-    //transform: Transform3,
-    //src: Rect,
-    //color: Color,
-
-    transform: [f32;16],
-    src: [f32;4],
-    color: [f32;4],
+    // actually sending to the GPU.  :-/
+    transform: [f32; 16],
+    src: [f32; 4],
+    color: [f32; 4],
 }
 
 use rendy::mesh::{Attribute, VertexFormat};
@@ -115,7 +106,7 @@ use std::borrow::Cow;
 /// This trait impl is basically extended from the impl for
 /// `rendy::mesh::Transform`
 impl AsVertex for InstanceData {
-    const VERTEX: VertexFormat<'static> =  VertexFormat {
+    const VERTEX: VertexFormat<'static> = VertexFormat {
         attributes: Cow::Borrowed(&[
             // transform as a `[vec4;4]`
             Attribute {
@@ -146,10 +137,10 @@ impl AsVertex for InstanceData {
             },
         ]),
         stride: 96,
-};
+    };
 }
 
-/// Uniform data.  Each Scene contains one of these.
+/// Uniform data.  Each frame contains one of these.
 #[derive(Clone, Copy, Debug)]
 #[repr(C, align(16))]
 struct UniformData {
@@ -158,14 +149,16 @@ struct UniformData {
 }
 
 /// What data we need for each frame in flight.
+/// Rendy doesn't do any synchronization for us
+/// beyond guarenteeing that when we get a new frame
+/// index everything touched by that frame index is
+/// now free to reuse.  So we just make one entire
+/// set of data per frame.
+///
 /// We could make different frames share buffers
 /// and descriptor sets and such and only change bits
 /// that aren't in use from other frames, but that's
 /// more complex than I want to get into right now.
-/// Rendy doesn't do any synchronization for us
-/// beyond guarenteeing that when we get a new frame
-/// index everything touched by that frame index is
-/// now free to reuse.
 #[derive(Debug)]
 struct FrameInFlight<B>
 where
@@ -218,12 +211,18 @@ where
         }
     }
 
-    fn new(factory: &mut Factory<B>, align: u64, draw_calls: &[DrawCall<B>], descriptor_set: &Handle<DescriptorSetLayout<B>>) -> Self {
+    fn new(
+        factory: &mut Factory<B>,
+        align: u64,
+        draw_calls: &[DrawCall<B>],
+        descriptor_set: &Handle<DescriptorSetLayout<B>>,
+    ) -> Self {
         let buffer = factory
             .create_buffer(
                 BufferInfo {
                     size: gbuffer_size(align),
                     usage: gfx_hal::buffer::Usage::UNIFORM
+                        // TODO: Can INDIRECT be removed?
                         | gfx_hal::buffer::Usage::INDIRECT
                         | gfx_hal::buffer::Usage::VERTEX,
                 },
@@ -237,7 +236,7 @@ where
             descriptor_sets,
             draw_offsets: vec![],
         };
-        let layout = Self::LAYOUT;
+        //let layout = Self::LAYOUT;
         for draw_call in draw_calls {
             // all descriptor sets use the same layout
             // we need one per draw call, per frame in flight.
@@ -249,17 +248,17 @@ where
     /// Takes a draw call and creates a descriptor set that points
     /// at its resources.
     ///
-    /// For now we do not care about reusing descriptor sets.
-    /// They all have the same layout though, so should be easy
-    /// eventually, but for now meh.
+    /// For now we do not care about reusing descriptor sets between draw calls.
     fn create_descriptor_sets(
         &mut self,
         factory: &Factory<B>,
         draw_call: &DrawCall<B>,
         layout: &Handle<DescriptorSetLayout<B>>,
-        align: u64,
+        _align: u64,
     ) {
-        // TODO: Does this sampler need to stay alive?
+        // Does this sampler need to stay alive?  We pass a
+        // reference to it elsewhere in an `unsafe` block...
+        // It's cached in the Factory anyway, so I don't think so.
         let sampler = factory
             .get_sampler(draw_call.sampler_info.clone())
             .expect("Could not get sampler");
@@ -302,8 +301,8 @@ where
         factory: &Factory<B>,
         uniforms: &UniformData,
         draw_calls: &[DrawCall<B>],
-        layout: &Handle<DescriptorSetLayout<B>>,
-        align: u64,
+        _layout: &Handle<DescriptorSetLayout<B>>,
+        _align: u64,
     ) {
         let mut instance_count = 0;
         unsafe {
@@ -312,7 +311,6 @@ where
                 .unwrap();
 
             for draw_call in draw_calls {
-
                 // Upload the instances to the right offset in the
                 // buffer.
                 // Vulkan doesn't seem to like zero-size copies.
@@ -337,19 +335,13 @@ where
         draw_calls: &[DrawCall<B>],
         layout: &B::PipelineLayout,
         encoder: &mut RenderPassEncoder<'_, B>,
-        align: u64,
+        _align: u64,
     ) {
-        let mut instances_count = 0;
         for ((draw_call, descriptor_set), draw_offset) in draw_calls
             .iter()
             .zip(&self.descriptor_sets)
             .zip(&self.draw_offsets)
         {
-            draw_call
-                .mesh
-                .bind(&[PosColorNorm::VERTEX], encoder)
-                .expect("Could not bind mesh?");
-
             // This is a bit weird, but basically tells the thing where to find the
             // instance data.  The stride and such of the instance structure is
             // defined in the `AsVertex` definition.
@@ -363,9 +355,14 @@ where
                 std::iter::once(descriptor_set.raw()),
                 std::iter::empty(),
             );
+            draw_call
+                .mesh
+                .bind(&[PosColorNorm::VERTEX], encoder)
+                .expect("Could not bind mesh?");
+
             encoder.bind_vertex_buffers(
                 1,
-                std::iter::once((self.buffer.raw(), ginstance_offset(instances_count))),
+                std::iter::once((self.buffer.raw(), ginstance_offset(*draw_offset as usize))),
             );
             // The index count is wrong...?
             // Maybe not.  See https://github.com/amethyst/rendy/issues/119
@@ -430,43 +427,6 @@ where
             color,
         };
         self.objects.push(instance);
-
-    }
-}
-
-#[derive(Debug)]
-struct Scene<B: gfx_hal::Backend> {
-    camera: UniformData,
-    object_mesh: Mesh<B>,
-    objects: Vec<InstanceData>,
-    texture: Texture<B>,
-    texture2: Texture<B>,
-
-    /// We just need the actual config for the sampler 'cause
-    /// Rendy's `Factory` can manage a sampler cache itself.
-    sampler_info: SamplerInfo,
-}
-
-impl<B> Scene<B>
-where
-    B: gfx_hal::Backend,
-{
-    fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng, max_width: f32, max_height: f32) {
-        let rx = Uniform::new(0.0, max_width);
-        let ry = Uniform::new(0.0, max_height);
-
-        if self.objects.len() < MAX_OBJECTS {
-            let transform = Transform3::create_translation(rx.sample(rng), ry.sample(rng), -100.0);
-            // println!("Transform: {:?}", transform);
-            let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
-            let color = [1.0, 0.0, 1.0, 1.0];
-            let instance = InstanceData {
-                transform: transform.to_row_major_array(),
-                src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
-                color,
-            };
-            self.objects.push(instance);
-        }
     }
 }
 
@@ -474,7 +434,6 @@ where
 struct Aux<B: gfx_hal::Backend> {
     frames: usize,
     align: u64,
-    scene: Scene<B>,
 
     draws: Vec<DrawCall<B>>,
     camera: UniformData,
@@ -483,23 +442,6 @@ struct Aux<B: gfx_hal::Backend> {
 const MAX_OBJECTS: usize = 10_000;
 const UNIFORM_SIZE: u64 = size_of::<UniformData>() as u64;
 const INSTANCES_SIZE: u64 = size_of::<InstanceData>() as u64 * MAX_OBJECTS as u64;
-const INDIRECT_SIZE: u64 = size_of::<DrawIndexedCommand>() as u64;
-
-const fn buffer_frame_size(align: u64) -> u64 {
-    ((UNIFORM_SIZE + INSTANCES_SIZE + INDIRECT_SIZE - 1) / align + 1) * align
-}
-
-const fn uniform_offset(index: usize, align: u64) -> u64 {
-    buffer_frame_size(align) * index as u64
-}
-
-const fn instances_offset(index: usize, align: u64) -> u64 {
-    uniform_offset(index, align) + UNIFORM_SIZE
-}
-
-const fn indirect_offset(index: usize, align: u64) -> u64 {
-    instances_offset(index, align) + INSTANCES_SIZE
-}
 
 /// The size of the buffer in a `FrameInFlight`.
 ///
@@ -538,9 +480,6 @@ struct MeshRenderPipelineDesc;
 
 #[derive(Debug)]
 struct MeshRenderPipeline<B: gfx_hal::Backend> {
-    // buffer: Escape<Buffer<B>>,
-    // sets: Vec<Escape<DescriptorSet<B>>>,
-
     frames_in_flight: Vec<FrameInFlight<B>>,
 }
 
@@ -556,59 +495,10 @@ where
 
     fn layout(&self) -> Layout {
         // TODO: Figure this stuff out.
+        // Currently we just have all draw call's use the same Layout,
+        // having a more sophisticated approach would be nice someday.
         Layout {
-            sets: vec![
-                SetLayout {
-                    bindings: vec![
-                        gfx_hal::pso::DescriptorSetLayoutBinding {
-                            binding: 0,
-                            ty: gfx_hal::pso::DescriptorType::UniformBuffer,
-                            count: 1,
-                            stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
-                            immutable_samplers: false,
-                        },
-                        gfx_hal::pso::DescriptorSetLayoutBinding {
-                            binding: 1,
-                            ty: gfx_hal::pso::DescriptorType::SampledImage,
-                            count: 1,
-                            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
-                            immutable_samplers: false,
-                        },
-                        gfx_hal::pso::DescriptorSetLayoutBinding {
-                            binding: 2,
-                            ty: gfx_hal::pso::DescriptorType::Sampler,
-                            count: 1,
-                            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
-                            immutable_samplers: false,
-                        },
-                    ],
-                },
-                SetLayout {
-                    bindings: vec![
-                        gfx_hal::pso::DescriptorSetLayoutBinding {
-                            binding: 0,
-                            ty: gfx_hal::pso::DescriptorType::UniformBuffer,
-                            count: 1,
-                            stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
-                            immutable_samplers: false,
-                        },
-                        gfx_hal::pso::DescriptorSetLayoutBinding {
-                            binding: 1,
-                            ty: gfx_hal::pso::DescriptorType::SampledImage,
-                            count: 1,
-                            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
-                            immutable_samplers: false,
-                        },
-                        gfx_hal::pso::DescriptorSetLayoutBinding {
-                            binding: 2,
-                            ty: gfx_hal::pso::DescriptorType::Sampler,
-                            count: 1,
-                            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
-                            immutable_samplers: false,
-                        },
-                    ],
-                },
-            ],
+            sets: vec![FrameInFlight::<B>::get_descriptor_set_layout()],
             push_constants: Vec::new(),
         }
     }
@@ -672,106 +562,14 @@ where
         assert_eq!(set_layouts.len(), 2);
 
         let (frames, align) = (aux.frames, aux.align);
-/*
-        let buffer = factory
-            .create_buffer(
-                BufferInfo {
-                    size: buffer_frame_size(align) * frames as u64,
-                    usage: gfx_hal::buffer::Usage::UNIFORM
-                        | gfx_hal::buffer::Usage::INDIRECT
-                        | gfx_hal::buffer::Usage::VERTEX,
-                },
-                Dynamic,
-            )
-            .unwrap();
 
+        // Okay, so, each `FrameInFlight` needs one descriptor set per draw call.
+        let mut frames_in_flight = vec![];
+        frames_in_flight.extend(
+            (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
+        );
 
-        let sampler = factory.get_sampler(aux.scene.sampler_info.clone())?;
-        let mut sets = Vec::new();
-        for index in 0..frames {
-            unsafe {
-                {
-                    let set = factory
-                        .create_descriptor_set(set_layouts[0].clone())
-                        .unwrap();
-
-                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                        set: set.raw(),
-                        binding: 0,
-                        array_offset: 0,
-                        descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
-                            buffer.raw(),
-                            Some(uniform_offset(index, align))
-                                ..Some(uniform_offset(index, align) + UNIFORM_SIZE),
-                        )),
-                    }));
-                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                        set: set.raw(),
-                        binding: 1,
-                        array_offset: 0,
-                        descriptors: vec![gfx_hal::pso::Descriptor::Image(
-                            aux.scene.texture.view().raw(),
-                            gfx_hal::image::Layout::ShaderReadOnlyOptimal,
-                        )],
-                    }));
-                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                        set: set.raw(),
-                        binding: 2,
-                        array_offset: 0,
-                        descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
-                    }));
-                    sets.push(set);
-                }
-
-                // Second descriptor set...?
-                {
-                    let set = factory
-                        .create_descriptor_set(set_layouts[1].clone())
-                        .unwrap();
-
-                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                        set: set.raw(),
-                        binding: 0,
-                        array_offset: 0,
-                        descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
-                            buffer.raw(),
-                            Some(uniform_offset(index, align))
-                                ..Some(uniform_offset(index, align) + UNIFORM_SIZE),
-                        )),
-                    }));
-                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                        set: set.raw(),
-                        binding: 1,
-                        array_offset: 0,
-                        descriptors: vec![gfx_hal::pso::Descriptor::Image(
-                            aux.scene.texture2.view().raw(),
-                            gfx_hal::image::Layout::ShaderReadOnlyOptimal,
-                        )],
-                    }));
-                    factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                        set: set.raw(),
-                        binding: 2,
-                        array_offset: 0,
-                        descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
-                    }));
-
-                    sets.push(set);
-                }
-            }
-        }
-
-*/
-    // Okay, so, each `FrameInFlight` needs one descriptor set per draw call.
-
-
-    let mut frames_in_flight = vec![];
-    frames_in_flight.extend((0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])));
-
-        Ok(MeshRenderPipeline { 
-            //buffer, 
-            // sets, 
-            frames_in_flight, 
-        })
+        Ok(MeshRenderPipeline { frames_in_flight })
     }
 }
 
@@ -789,62 +587,10 @@ where
         index: usize,
         aux: &Aux<B>,
     ) -> PrepareResult {
-        let (scene, align) = (&aux.scene, aux.align);
+        let align = aux.align;
 
         let layout = &set_layouts[0];
         self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
-/*
-        unsafe {
-            factory
-                .upload_visible_buffer(
-                    &mut self.buffer,
-                    uniform_offset(index, align),
-                    &[UniformData {
-                        proj: scene.camera.proj,
-                        view: scene.camera.view.inverse().unwrap(),
-                    }],
-                )
-                .unwrap()
-        };
-
-        let half_len = scene.objects.len() as u32;
-        unsafe {
-            factory
-                .upload_visible_buffer(
-                    &mut self.buffer,
-                    indirect_offset(index, align),
-                    &[
-                        DrawIndexedCommand {
-                            index_count: scene.object_mesh.len(),
-                            instance_count: half_len,
-                            first_index: 0,
-                            vertex_offset: 0,
-                            first_instance: 0,
-                        },
-                        DrawIndexedCommand {
-                            index_count: scene.object_mesh.len(),
-                            instance_count: half_len,
-                            first_index: 0,
-                            vertex_offset: 0,
-                            first_instance: half_len,
-                        },
-                    ],
-                )
-                .unwrap()
-        };
-
-        if !scene.objects.is_empty() {
-            unsafe {
-                factory
-                    .upload_visible_buffer(
-                        &mut self.buffer,
-                        instances_offset(index, align),
-                        &scene.objects[..],
-                    )
-                    .unwrap()
-            };
-        }
-*/
         PrepareResult::DrawReuse
     }
 
@@ -856,55 +602,6 @@ where
         aux: &Aux<B>,
     ) {
         self.frames_in_flight[index].draw(&aux.draws, layout, &mut encoder, aux.align);
-        /*
-        let descriptor_set1 = vec![self.sets[0].raw()];
-        let descriptor_set2 = vec![self.sets[3].raw()];
-        let vertex_buffers = vec![
-            (self.buffer.raw(), instances_offset(index, aux.align)),
-            // (self.buffer.raw(), instances_offset(index, aux.align)),
-        ];
-
-        aux.scene
-            .object_mesh
-            .bind(&[PosColorNorm::VERTEX], &mut encoder)
-            .expect("Could not bind mesh?");
-
-        encoder.bind_vertex_buffers(
-            1,
-            // std::iter::once((self.buffer.raw(), instances_offset(index, aux.align))),
-            vertex_buffers.into_iter(),
-        );
-        encoder.bind_graphics_descriptor_sets(
-            layout,
-            0,
-            descriptor_set1.into_iter(),
-            std::iter::empty(),
-        );
-        encoder.draw_indexed_indirect(
-            self.buffer.raw(),
-            indirect_offset(index, aux.align),
-            1,
-            INDIRECT_SIZE as u32,
-        );
-        // encoder.draw_indexed(
-        //     0..6,
-        //     0,
-        //     0..(aux.scene.objects.len() as u32),
-        // );
-
-        encoder.bind_graphics_descriptor_sets(
-            layout,
-            0,
-            descriptor_set2.into_iter(),
-            std::iter::empty(),
-        );
-        encoder.draw_indexed_indirect(
-            self.buffer.raw(),
-            indirect_offset(index, aux.align) + INDIRECT_SIZE,
-            1,
-            INDIRECT_SIZE as u32,
-        );
-        */
     }
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
@@ -936,6 +633,7 @@ fn make_quad_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
 where
     B: gfx_hal::Backend,
 {
+    // TODO: Actually use indices right XD
     let verts: Vec<[f32; 3]> = vec![
         [0.0, 0.0, 0.0],
         [0.0, 100.0, 0.0],
@@ -945,18 +643,14 @@ where
         [100.0, 0.0, 0.0],
     ];
     let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 3, 4, 5]);
+    // TODO: Mesh color... how do we want to handle this?
+    // It's a bit of an open question in ggez as well, so.
+    // For now the shader just uses the vertex color.
     let vertices: Vec<_> = verts
         .into_iter()
-        // TODO: Mesh color... how do we want to handle this?
         .map(|v| PosColorNorm {
             position: rendy::mesh::Position::from(v),
-            color: [1.0, 1.0, 1.0, 1.0]
-                // (v[0] + 1.0) / 2.0,
-                // (v[1] + 1.0) / 2.0,
-                // (v[2] + 1.0) / 2.0,
-                //     1.0,
-                // ]
-                .into(),
+            color: [1.0, 1.0, 1.0, 1.0].into(),
             normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
         })
         .collect();
@@ -1043,29 +737,9 @@ fn main() {
         "/src/data/gfx_logo.png"
     ));
 
-    let texture_1 = make_texture(queue_id, &mut factory, gfx_bytes);
-    let texture_2 = make_texture(queue_id, &mut factory, rendy_bytes);
-    let object_mesh1 = make_quad_mesh(queue_id, &mut factory);
-
-    let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
     let width = window_size.width as f32;
     let height = window_size.height as f32;
     println!("dims: {}x{}", width, height);
-    let scene = Scene {
-        // TODO: Make view and proj separate?  Maybe.  We should only need one.
-        camera: UniformData {
-            proj: Transform3::ortho(0.0, width, height, 0.0, 1.0, 200.0),
-
-            view: Transform3::create_translation(0.0, 0.0, 10.0),
-        },
-        objects: vec![],
-        object_mesh: object_mesh1,
-        texture: texture_1,
-        texture2: texture_2,
-
-        sampler_info,
-    };
-
 
     let texture1 = make_texture(queue_id, &mut factory, gfx_bytes);
     let texture2 = make_texture(queue_id, &mut factory, rendy_bytes);
@@ -1074,9 +748,9 @@ fn main() {
     let object_mesh2 = make_quad_mesh(queue_id, &mut factory);
 
     let align = factory
-            .physical()
-            .limits()
-            .min_uniform_buffer_offset_alignment;
+        .physical()
+        .limits()
+        .min_uniform_buffer_offset_alignment;
 
     let draws = vec![
         DrawCall::new(texture1, object_mesh1),
@@ -1085,7 +759,6 @@ fn main() {
     let mut aux = Aux {
         frames: frames as _,
         align,
-        scene,
 
         draws,
         camera: UniformData {
@@ -1100,20 +773,16 @@ fn main() {
         .build(&mut factory, &mut families, &aux)
         .unwrap();
 
-    log::info!("{:#?}", aux.scene);
-
     let started = time::Instant::now();
 
     let mut frames = 0u64..;
     let mut rng = rand::thread_rng();
 
-    let mut fpss = Vec::new();
     let mut checkpoint = started;
     let mut should_close = false;
 
-    while !should_close && aux.scene.objects.len() < MAX_OBJECTS {
-        let start = frames.start;
-        let from = aux.scene.objects.len();
+    // TODO: Someday actually check against MAX_OBJECTS
+    while !should_close {
         for _ in &mut frames {
             factory.maintain(&mut families);
             event_loop.poll_events(|event| match event {
@@ -1126,27 +795,15 @@ fn main() {
             graph.run(&mut factory, &mut families, &aux);
 
             let elapsed = checkpoint.elapsed();
-            // aux.scene.add_object(&mut rng, width, height);
             aux.draws[0].add_object(&mut rng, width, height);
             aux.draws[1].add_object(&mut rng, width, height);
 
-            if should_close
-                || elapsed > std::time::Duration::new(5, 0)
-                || aux.scene.objects.len() == MAX_OBJECTS
-            {
-                let frames = frames.start - start;
-                let nanos = elapsed.as_secs() * 1_000_000_000 + elapsed.subsec_nanos() as u64;
-                fpss.push((
-                    frames * 1_000_000_000 / nanos,
-                    from..aux.scene.objects.len(),
-                ));
+            if should_close || elapsed > std::time::Duration::new(5, 0) {
                 checkpoint += elapsed;
                 break;
             }
         }
     }
-
-    log::info!("FPS: {:#?}", fpss);
 
     graph.dispose(&mut factory, &aux);
 }
