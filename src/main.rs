@@ -1,9 +1,4 @@
 /*
-TODO: Make backend select-able either based on platform,
-or at runtime?
-TODO: Rendy has no gl backend yet.
-TODO: Make shaderc less inconvenient?
-
 Okay, so the first step is going to be rendering multiple things with the same
 geometry and texture using instanced drawing.
 
@@ -41,11 +36,7 @@ use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
 use euclid;
 
-//type Point2 = euclid::Vector2D<f32>;
-//type Vector2 = euclid::Vector2D<f32>;
-//type Vector3 = euclid::Vector3D<f32>;
 type Transform3 = euclid::Transform3D<f32>;
-//type Color = [f32; 4];
 type Rect = euclid::Rect<f32>;
 
 // TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
@@ -55,6 +46,9 @@ type Rect = euclid::Rect<f32>;
 //
 // TODO: We ALSO need to specify features to rendy to build these, so this doesn't even work currently.
 // For now we only ever specify Vulkan.
+//
+// Rendy doesn't currently work on gfx-rs's DX12 backend though, and the OpenGL backend
+// is still WIP, so...  I guess this is what we get.
 #[cfg(target_os = "macos")]
 type Backend = rendy::metal::Backend;
 
@@ -63,7 +57,6 @@ type Backend = rendy::vulkan::Backend;
 
 lazy_static::lazy_static! {
     static ref VERTEX: SpirvShader = StaticShaderInfo::new(
-       // concat!(env!("CARGO_MANIFEST_DIR"), "/examples/meshes/shader.vert"),
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
         ShaderKind::Vertex,
         SourceLanguage::GLSL,
@@ -71,7 +64,6 @@ lazy_static::lazy_static! {
     ).precompile().unwrap();
 
     static ref FRAGMENT: SpirvShader = StaticShaderInfo::new(
-        //concat!(env!("CARGO_MANIFEST_DIR"), "/examples/meshes/shader.frag"),
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
         ShaderKind::Fragment,
         SourceLanguage::GLSL,
@@ -237,7 +229,6 @@ where
             descriptor_sets,
             draw_offsets: vec![],
         };
-        //let layout = Self::LAYOUT;
         for draw_call in draw_calls {
             // all descriptor sets use the same layout
             // we need one per draw call, per frame in flight.
@@ -350,13 +341,10 @@ where
             .zip(&self.draw_offsets)
         {
             //println!("Drawing {:#?}, {:#?}, {}", draw_call, descriptor_set, draw_offset);
+
             // This is a bit weird, but basically tells the thing where to find the
             // instance data.  The stride and such of the instance structure is
             // defined in the `AsVertex` definition.
-            //
-            // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
-            // to differentiate which *place* we're binding to; see the 0 in the
-            // bind_graphics_descriptor_sets().
             encoder.bind_graphics_descriptor_sets(
                 layout,
                 0,
@@ -367,20 +355,22 @@ where
                 .mesh
                 .bind(&[PosColorNorm::VERTEX], encoder)
                 .expect("Could not bind mesh?");
-
+            // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
+            // to differentiate which *place* we're binding to; see the 0 in the
+            // bind_graphics_descriptor_sets().
             encoder.bind_vertex_buffers(
                 1,
                 std::iter::once((self.buffer.raw(), ginstance_offset(instance_count))),
             );
-            // The index count is wrong...?
-            // Maybe not.  See https://github.com/amethyst/rendy/issues/119
+
+            // The length of the mesh is the number of indices if it has any, the number
+            // of verts otherwise.  See https://github.com/amethyst/rendy/issues/119
             let indices = 0..(draw_call.mesh.len() as u32);
             // This count is the *number of instances*.  What instance
             // to start at in the buffer is defined by the offset in
             // `bind_vertex_buffers()` above, and the stride/size of an instance
             // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
-            //println!("Drawing instances {:?} starting from {}", instances, ginstance_offset(instance_count));
             encoder.draw_indexed(indices, 0, instances);
             instance_count += draw_call.objects.len();
         }
@@ -759,10 +749,7 @@ fn main() {
         env!("CARGO_MANIFEST_DIR"),
         "/src/data/rust_logo.png"
     ));
-    let heart_bytes = include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/src/data/heart.png"
-    ));
+    let heart_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
 
     let width = window_size.width as f32;
     let height = window_size.height as f32;
@@ -806,7 +793,6 @@ fn main() {
         .build(&mut factory, &mut families, &aux)
         .unwrap();
 
-
     let mut frames = 0u64..;
     let mut rng = rand::thread_rng();
 
@@ -814,16 +800,15 @@ fn main() {
     println!("Adding objects...");
     for draw_call in &mut aux.draws {
         for _ in 0..MAX_OBJECTS {
-            draw_call.add_object(&mut rng, width, height); 
+            draw_call.add_object(&mut rng, width, height);
         }
     }
     println!("Objects added.");
 
-
     let started = time::Instant::now();
     // TODO: Someday actually check against MAX_OBJECTS
     while !should_close {
-        for i in &mut frames {
+        for _i in &mut frames {
             factory.maintain(&mut families);
             event_loop.poll_events(|event| match event {
                 Event::WindowEvent {
@@ -843,7 +828,12 @@ fn main() {
     let dt = finished - started;
     let millis = dt.as_millis() as f64;
     let fps = frames.start as f64 / (millis / 1000.0);
-    println!("{} frames over {} seconds; {} fps", frames.start, millis / 1000.0, fps);
+    println!(
+        "{} frames over {} seconds; {} fps",
+        frames.start,
+        millis / 1000.0,
+        fps
+    );
 
     graph.dispose(&mut factory, &aux);
 }
