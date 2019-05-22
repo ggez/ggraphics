@@ -28,7 +28,7 @@ use rendy::resource::{
     Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
     WrapMode,
 };
-use rendy::shader::{Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo};
+use rendy::shader::{self, Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo};
 use rendy::texture::Texture;
 
 use rand::distributions::{Distribution, Uniform};
@@ -56,6 +56,7 @@ type Backend = rendy::metal::Backend;
 type Backend = rendy::vulkan::Backend;
 
 lazy_static::lazy_static! {
+    /*
     static ref VERTEX: SpirvShader = StaticShaderInfo::new(
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
         ShaderKind::Vertex,
@@ -69,6 +70,26 @@ lazy_static::lazy_static! {
         SourceLanguage::GLSL,
         "main",
     ).precompile().unwrap();
+
+*/
+            static ref VERTEX: StaticShaderInfo = StaticShaderInfo::new(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
+        ShaderKind::Vertex,
+        SourceLanguage::GLSL,
+        "main",
+    );
+
+    static ref FRAGMENT: StaticShaderInfo = StaticShaderInfo::new(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
+        ShaderKind::Fragment,
+        SourceLanguage::GLSL,
+        "main",
+    );
+
+    static ref SHADERS: rendy::shader::ShaderSetBuilder = rendy::shader::ShaderSetBuilder::default()
+        .with_vertex(&*VERTEX).unwrap()
+        .with_fragment(&*FRAGMENT).unwrap();
+
 }
 
 /// Data we need per instance.  DrawParam gets turned into this.
@@ -98,38 +119,63 @@ use std::borrow::Cow;
 /// This trait impl is basically extended from the impl for
 /// `rendy::mesh::Transform`
 impl AsVertex for InstanceData {
-    const VERTEX: VertexFormat<'static> = VertexFormat {
-        attributes: Cow::Borrowed(&[
-            // transform as a `[vec4;4]`
-            Attribute {
-                format: gfx_hal::format::Format::Rgba32Float,
-                offset: 0,
-            },
-            Attribute {
-                format: gfx_hal::format::Format::Rgba32Float,
-                offset: 16,
-            },
-            Attribute {
-                format: gfx_hal::format::Format::Rgba32Float,
-                offset: 32,
-            },
-            Attribute {
-                format: gfx_hal::format::Format::Rgba32Float,
-                offset: 48,
-            },
-            // rect
-            Attribute {
-                format: gfx_hal::format::Format::Rgba32Float,
-                offset: 64,
-            },
-            // color
-            Attribute {
-                format: gfx_hal::format::Format::Rgba32Float,
-                offset: 80,
-            },
-        ]),
-        stride: 96,
-    };
+    fn vertex() -> VertexFormat {
+        VertexFormat {
+            attributes: vec![
+                Attribute::new(
+                    "Transform1",
+                    0,
+                    gfx_hal::pso::Element {
+                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                        offset: 0,
+                    },
+                ),
+                Attribute::new(
+                    "Transform2",
+                    1,
+                    gfx_hal::pso::Element {
+                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                        offset: 16,
+                    },
+                ),
+                Attribute::new(
+                    "Transform3",
+                    0,
+                    gfx_hal::pso::Element {
+                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                        offset: 32,
+                    },
+                ),
+                Attribute::new(
+                    "Transform4",
+                    0,
+                    gfx_hal::pso::Element {
+                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                        offset: 48,
+                    },
+                ),
+                // rect
+                Attribute::new(
+                    "rect",
+                    0,
+                    gfx_hal::pso::Element {
+                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                        offset: 64,
+                    },
+                ),
+                // color
+                Attribute::new(
+                    "color",
+                    0,
+                    gfx_hal::pso::Element {
+                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                        offset: 80,
+                    },
+                ),
+            ],
+            stride: 96,
+        }
+    }
 }
 
 /// Uniform data.  Each frame contains one of these.
@@ -353,7 +399,7 @@ where
             );
             draw_call
                 .mesh
-                .bind(&[PosColorNorm::VERTEX], encoder)
+                .bind(0, &[PosColorNorm::vertex()], encoder)
                 .expect("Could not bind mesh?");
             // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
             // to differentiate which *place* we're binding to; see the 0 in the
@@ -509,44 +555,44 @@ where
         &self,
     ) -> Vec<(
         Vec<gfx_hal::pso::Element<gfx_hal::format::Format>>,
-        gfx_hal::pso::ElemStride,
-        gfx_hal::pso::InstanceRate,
+        u32,
+        gfx_hal::pso::VertexInputRate,
     )> {
         vec![
-            PosColorNorm::VERTEX.gfx_vertex_input_desc(0),
-            InstanceData::VERTEX.gfx_vertex_input_desc(1),
+            // TODO: Double-check vertex input rate.
+            PosColorNorm::vertex().gfx_vertex_input_desc(gfx_hal::pso::VertexInputRate::Vertex),
+            InstanceData::vertex()
+                .gfx_vertex_input_desc(gfx_hal::pso::VertexInputRate::Instance(1)),
         ]
     }
 
-    fn load_shader_set<'a>(
-        &self,
-        storage: &'a mut Vec<B::ShaderModule>,
-        factory: &mut Factory<B>,
-        _aux: &Aux<B>,
-    ) -> gfx_hal::pso::GraphicsShaderSet<'a, B> {
-        storage.clear();
+    fn load_shader_set(&self, factory: &mut Factory<B>, _aux: &Aux<B>) -> shader::ShaderSet<B> {
+        SHADERS.build(factory, Default::default()).unwrap()
+        /*
+                storage.clear();
 
-        log::trace!("Load shader module VERTEX");
-        storage.push(unsafe { VERTEX.module(factory).unwrap() });
+                log::trace!("Load shader module VERTEX");
+                storage.push(unsafe { VERTEX.module(factory).unwrap() });
 
-        log::trace!("Load shader module FRAGMENT");
-        storage.push(unsafe { FRAGMENT.module(factory).unwrap() });
+                log::trace!("Load shader module FRAGMENT");
+                storage.push(unsafe { FRAGMENT.module(factory).unwrap() });
 
-        gfx_hal::pso::GraphicsShaderSet {
-            vertex: gfx_hal::pso::EntryPoint {
-                entry: "main",
-                module: &storage[0],
-                specialization: gfx_hal::pso::Specialization::default(),
-            },
-            fragment: Some(gfx_hal::pso::EntryPoint {
-                entry: "main",
-                module: &storage[1],
-                specialization: gfx_hal::pso::Specialization::default(),
-            }),
-            hull: None,
-            domain: None,
-            geometry: None,
-        }
+                gfx_hal::pso::GraphicsShaderSet {
+                    vertex: gfx_hal::pso::EntryPoint {
+                        entry: "main",
+                        module: &storage[0],
+                        specialization: gfx_hal::pso::Specialization::default(),
+                    },
+                    fragment: Some(gfx_hal::pso::EntryPoint {
+                        entry: "main",
+                        module: &storage[1],
+                        specialization: gfx_hal::pso::Specialization::default(),
+                    }),
+                    hull: None,
+                    domain: None,
+                    geometry: None,
+                }
+        */
     }
 
     fn build<'a>(
@@ -621,7 +667,8 @@ fn make_texture<B>(queue_id: QueueId, factory: &mut Factory<B>, image_bytes: &[u
 where
     B: gfx_hal::Backend,
 {
-    let texture_builder = rendy::texture::image::load_from_image(image_bytes, Default::default())
+    let cursor = std::io::Cursor::new(image_bytes);
+    let texture_builder = rendy::texture::image::load_from_image(cursor, Default::default())
         .expect("Could not load texture?");
 
     let texture = texture_builder
@@ -690,12 +737,18 @@ fn main() {
 
     event_loop.poll_events(|_| ());
 
-    let surface = factory.create_surface(window.into());
+    let surface = factory.create_surface(&window);
 
     let mut graph_builder = GraphBuilder::<Backend, Aux<Backend>>::new();
 
+    let size = window
+        .get_inner_size()
+        .unwrap()
+        .to_physical(window.get_hidpi_factor());
+
+    let window_kind = gfx_hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
     let color = graph_builder.create_image(
-        surface.kind(),
+        window_kind,
         1,
         factory.get_surface_format(&surface),
         Some(gfx_hal::command::ClearValue::Color(
