@@ -269,15 +269,15 @@ where
         unsafe {
             let set = factory.create_descriptor_set(layout.clone()).unwrap();
 
-            factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-                set: set.raw(),
-                binding: 0,
-                array_offset: 0,
-                descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
-                    self.buffer.raw(),
-                    Some(guniform_offset())..Some(guniform_offset() + UNIFORM_SIZE),
-                )),
-            }));
+            // factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+            //     set: set.raw(),
+            //     binding: 0,
+            //     array_offset: 0,
+            //     descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
+            //         self.buffer.raw(),
+            //         Some(guniform_offset())..Some(guniform_offset() + UNIFORM_SIZE),
+            //     )),
+            // }));
             factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
                 set: set.raw(),
                 binding: 1,
@@ -315,9 +315,9 @@ where
         //println!("Preparing frame-in-flight, {} draw calls, first has {} instances.", draw_calls.len(),
         //draw_calls[0].objects.len());
         unsafe {
-            factory
-                .upload_visible_buffer(&mut self.buffer, guniform_offset(), &[uniforms.clone()])
-                .unwrap();
+            // factory
+            //     .upload_visible_buffer(&mut self.buffer, guniform_offset(), &[uniforms.clone()])
+            //     .unwrap();
 
             for draw_call in draw_calls {
                 // Upload the instances to the right offset in the
@@ -471,10 +471,11 @@ struct Aux<B: gfx_hal::Backend> {
 }
 
 const MAX_OBJECTS: usize = 10_000;
-const UNIFORM_SIZE: u64 = size_of::<UniformData>() as u64;
 const INSTANCES_SIZE: u64 = size_of::<InstanceData>() as u64 * MAX_OBJECTS as u64;
 
 /// The size of the buffer in a `FrameInFlight`.
+///
+/// TODO: Update this with removal of uniforms.
 ///
 /// We pack data from multiple `DrawCall`'s together into one `Buffer`
 /// but each draw call can have a varying amount of instance data,
@@ -490,20 +491,16 @@ const INSTANCES_SIZE: u64 = size_of::<InstanceData>() as u64 * MAX_OBJECTS as u6
 /// ALSO TODO: Would probably be nicer to stick the uniforms into
 /// push constants someday, but one thing at a time.
 const fn gbuffer_size(align: u64) -> u64 {
-    ((UNIFORM_SIZE + INSTANCES_SIZE - 1) / align + 1) * align
+    ((INSTANCES_SIZE - 1) / align + 1) * align
 }
 
-/// Offset of the uniforms section in the buffer.
-const fn guniform_offset() -> u64 {
-    0
-}
 
 /// The offset pointing to free space right after the given number
 /// of instances.
 ///
 /// TODO: Are there alignment requirements for this?
 const fn ginstance_offset(instance_count: usize) -> u64 {
-    guniform_offset() + UNIFORM_SIZE + (instance_count * size_of::<InstanceData>()) as u64
+    (instance_count * size_of::<InstanceData>()) as u64
 }
 
 /// Okay, we NEED a default() method on this, 'cause it is

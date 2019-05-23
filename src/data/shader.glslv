@@ -11,14 +11,10 @@ layout(location = 3) in vec4 model[4];
 layout(location = 7) in vec4 src;
 layout(location = 8) in vec4 model_color;
 
-layout(set = 0, binding = 0) uniform Args {
+layout(push_constant) uniform PushConstantTest {
     mat4 proj;
     mat4 view;
 };
-layout(push_constant) uniform PushConstantTest {
-    mat4 test1;
-    mat4 test2;
-}
 
 
 layout(location = 0) out vec4 frag_pos;
