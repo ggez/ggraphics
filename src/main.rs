@@ -168,7 +168,7 @@ struct FrameInFlight<B>
 where
     B: gfx_hal::Backend,
 {
-    /// The buffer where we store uniform and instance data.
+    /// The buffer where we store instance data.
     buffer: Escape<Buffer<B>>,
     /// One descriptor set per draw call we do.
     /// Also has the number of instances in that draw call,
@@ -176,7 +176,8 @@ where
     descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
     /// Offsets in the buffer to start each draw call from.
     draw_offsets: Vec<u64>,
-    uniforms: UniformData,
+    /// The frame's local copy of uniform data.
+    push_constants: [u32; 32],
 }
 
 impl<B> FrameInFlight<B>
@@ -184,9 +185,11 @@ where
     B: gfx_hal::Backend,
 {
     /// All our descriptor sets use the same layout.
-    /// This one!  We have a uniform buffer, an
+    /// This one!  We have an instance buffer, an
     /// image, and a sampler.
     const LAYOUT: &'static [gfx_hal::pso::DescriptorSetLayoutBinding] = &[
+        // TODO: Can we get rid of this uniform buffer since we use push constants?
+        // Doesn't look like it, 'cause we use the buffer for our instance data too.
         gfx_hal::pso::DescriptorSetLayoutBinding {
             binding: 0,
             ty: gfx_hal::pso::DescriptorType::UniformBuffer,
@@ -238,7 +241,7 @@ where
             buffer,
             descriptor_sets,
             draw_offsets: vec![],
-            uniforms: UniformData::default(),
+            push_constants: [0; 32],
         };
         for draw_call in draw_calls {
             // all descriptor sets use the same layout
@@ -251,7 +254,7 @@ where
     /// Takes a draw call and creates a descriptor set that points
     /// at its resources.
     ///
-    /// For now we do not care about reusing descriptor sets between draw calls.
+    /// For now we do not care about preserving descriptor sets between draw calls.
     fn create_descriptor_sets(
         &mut self,
         factory: &Factory<B>,
@@ -268,19 +271,9 @@ where
 
         unsafe {
             let set = factory.create_descriptor_set(layout.clone()).unwrap();
-
-            // factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
-            //     set: set.raw(),
-            //     binding: 0,
-            //     array_offset: 0,
-            //     descriptors: Some(gfx_hal::pso::Descriptor::Buffer(
-            //         self.buffer.raw(),
-            //         Some(guniform_offset())..Some(guniform_offset() + UNIFORM_SIZE),
-            //     )),
-            // }));
             factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
                 set: set.raw(),
-                binding: 1,
+                binding: 0,
                 array_offset: 0,
                 descriptors: vec![gfx_hal::pso::Descriptor::Image(
                     draw_call.texture.view().raw(),
@@ -289,7 +282,7 @@ where
             }));
             factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
                 set: set.raw(),
-                binding: 2,
+                binding: 1,
                 array_offset: 0,
                 descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
             }));
@@ -309,16 +302,18 @@ where
     ) {
         assert!(draw_calls.len() > 0);
         // Store the uniforms to be shoved into push constants this frame
-        self.uniforms = *uniforms;
+        // TODO: Be less crude about indexing and such.
+        for (i, vl) in uniforms.proj.to_row_major_array().into_iter().enumerate() {
+            self.push_constants[i] = vl.to_bits();
+        }
+        for (i, vl) in uniforms.view.to_row_major_array().into_iter().enumerate() {
+            self.push_constants[16 + i] = vl.to_bits();
+        }
 
         let mut instance_count = 0;
         //println!("Preparing frame-in-flight, {} draw calls, first has {} instances.", draw_calls.len(),
         //draw_calls[0].objects.len());
         unsafe {
-            // factory
-            //     .upload_visible_buffer(&mut self.buffer, guniform_offset(), &[uniforms.clone()])
-            //     .unwrap();
-
             for draw_call in draw_calls {
                 // Upload the instances to the right offset in the
                 // buffer.
@@ -378,17 +373,11 @@ where
                 std::iter::once((self.buffer.raw(), ginstance_offset(instance_count))),
             );
 
-            // Number of floats in the push constant
-            let mut push_constant_values = Vec::with_capacity(32);
-            push_constant_values.extend(self.uniforms.proj.to_row_major_array().as_ref());
-            push_constant_values.extend(self.uniforms.view.to_row_major_array().as_ref());
-            let converted_push_constants: Vec<u32> =
-                push_constant_values.into_iter().map(f32::to_bits).collect();
             encoder.push_constants(
                 layout,
                 gfx_hal::pso::ShaderStageFlags::ALL,
                 0,
-                converted_push_constants.as_ref(),
+                &self.push_constants,
             );
             // The length of the mesh is the number of indices if it has any, the number
             // of verts otherwise.  See https://github.com/amethyst/rendy/issues/119
@@ -475,25 +464,20 @@ const INSTANCES_SIZE: u64 = size_of::<InstanceData>() as u64 * MAX_OBJECTS as u6
 
 /// The size of the buffer in a `FrameInFlight`.
 ///
-/// TODO: Update this with removal of uniforms.
-///
 /// We pack data from multiple `DrawCall`'s together into one `Buffer`
 /// but each draw call can have a varying amount of instance data,
 /// so we end up with something like:
 ///
 /// ```
-/// |Uniforms | Instances1 ... | Instances2 ... | ... | empty space |
+/// | Instances1 ... | Instances2 ... | ... | empty space |
 /// ```
 ///
 /// Right now we have a fixed size buffer and just limit the number
 /// of objects in it.  TODO: Eventually someday we will grow the buffer
 /// as needed.  Maybe shrink it too?  Not sure about that.
-/// ALSO TODO: Would probably be nicer to stick the uniforms into
-/// push constants someday, but one thing at a time.
 const fn gbuffer_size(align: u64) -> u64 {
     ((INSTANCES_SIZE - 1) / align + 1) * align
 }
-
 
 /// The offset pointing to free space right after the given number
 /// of instances.
@@ -523,10 +507,9 @@ where
     type Pipeline = MeshRenderPipeline<B>;
 
     fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
-        // The rendy default, except with LessEqual instead
-        // of just Less.  This makes things with the exact same Z
-        // render in draw-order with newer ones on top, with
-        // transparency.
+        // The rendy default, except with LessEqual instead of just
+        // Less.  This makes things with the exact same Z coord render
+        // in draw-order with newer ones on top, with transparency.
         Some(gfx_hal::pso::DepthStencilDesc {
             depth: gfx_hal::pso::DepthTest::On {
                 fun: gfx_hal::pso::Comparison::LessEqual,
@@ -543,6 +526,10 @@ where
         // having a more sophisticated approach would be nice someday.
         let push_constants = vec![(
             gfx_hal::pso::ShaderStageFlags::ALL,
+            // Pretty sure the size of push constants is given in bytes,
+            // but even putting nonsense sizes in here seems to make
+            // the program run fine unless you put super extreme values in.
+            // Thanks, NVidia.
             0..(size_of::<UniformData>() as u32),
         )];
         Layout {
@@ -585,7 +572,7 @@ where
 
         let (frames, align) = (aux.frames, aux.align);
 
-        // Okay, so, each `FrameInFlight` needs one descriptor set per draw call.
+        // Each `FrameInFlight` needs one descriptor set per draw call.
         let mut frames_in_flight = vec![];
         frames_in_flight.extend(
             (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
