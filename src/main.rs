@@ -512,7 +512,19 @@ where
     type Pipeline = MeshRenderPipeline<B>;
 
     fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
-        None
+        // The rendy default, except with LessEqual instead
+        // of just Less.  This makes things with the exact same Z
+        // render in draw-order with newer ones on top, with
+        // transparency.
+        Some(gfx_hal::pso::DepthStencilDesc {
+            depth: gfx_hal::pso::DepthTest::On {
+                fun: gfx_hal::pso::Comparison::LessEqual,
+                write: true,
+            },
+            depth_bounds: false,
+            stencil: gfx_hal::pso::StencilTest::Off,
+        })
+
     }
 
     fn layout(&self) -> Layout {
@@ -830,13 +842,6 @@ fn main() {
     let mut rng = rand::thread_rng();
 
     let mut should_close = false;
-    println!("Adding objects...");
-    for draw_call in &mut aux.draws {
-        for _ in 0..MAX_OBJECTS {
-            draw_call.add_object(&mut rng, width, height);
-        }
-    }
-    println!("Objects added.");
 
     let started = time::Instant::now();
     // TODO: Someday actually check against MAX_OBJECTS
@@ -851,7 +856,10 @@ fn main() {
                 _ => (),
             });
             graph.run(&mut factory, &mut families, &aux);
-
+            // Add another object
+            for draw_call in &mut aux.draws {
+                draw_call.add_object(&mut rng, width, height);
+            }
             if should_close {
                 break;
             }
