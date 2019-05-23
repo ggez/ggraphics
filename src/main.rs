@@ -738,20 +738,20 @@ fn main() {
         )),
     );
 
-    // let depth = graph_builder.create_image(
-    //     surface.kind(),
-    //     1,
-    //     gfx_hal::format::Format::D16Unorm,
-    //     Some(gfx_hal::command::ClearValue::DepthStencil(
-    //         gfx_hal::command::ClearDepthStencil(1.0, 0),
-    //     )),
-    // );
+    let depth = graph_builder.create_image(
+        window_kind,
+        1,
+        gfx_hal::format::Format::D16Unorm,
+        Some(gfx_hal::command::ClearValue::DepthStencil(
+            gfx_hal::command::ClearDepthStencil(1.0, 0),
+        )),
+    );
 
     let pass = graph_builder.add_node(
         MeshRenderPipeline::builder()
             .into_subpass()
             .with_color(color)
-            // .with_depth_stencil(depth)
+            .with_depth_stencil(depth)
             .into_pass(),
     );
 
