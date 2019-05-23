@@ -13,7 +13,6 @@ log = "0.4"
 winit = "0.19"
 rendy = {version = "0.2", features=["texture-image", "vulkan"]}
 #rendy = {git="https://github.com/amethyst/rendy.git", rev="5c35277f9080e0ea8b73096f62ddb399cf73820a", features=["texture-image", "vulkan"]}
-lazy_static = "1"
 failure = "0.1"
 euclid = "0.19"
 

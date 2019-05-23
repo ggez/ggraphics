@@ -10,6 +10,9 @@ different geometry.
 Last+1 step might be to make rendering quads a more efficient special case,
 for example by reifying the geometry in the vertex shader a la the Rendy
 quads example.
+
+Last+2 step is going to be having multiple pipelines/render passes with
+different shaders.
  */
 
 use std::{mem::size_of, time};
@@ -28,7 +31,7 @@ use rendy::resource::{
     Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
     WrapMode,
 };
-use rendy::shader::{self, Shader, ShaderKind, SourceLanguage, SpirvShader, StaticShaderInfo};
+use rendy::shader::{self, ShaderKind, SourceLanguage, StaticShaderInfo};
 use rendy::texture::Texture;
 
 use rand::distributions::{Distribution, Uniform};
@@ -55,28 +58,6 @@ type Backend = rendy::metal::Backend;
 #[cfg(not(target_os = "macos"))]
 type Backend = rendy::vulkan::Backend;
 
-/*
-lazy_static::lazy_static! {
-    static ref VERTEX: StaticShaderInfo = StaticShaderInfo::new(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
-        ShaderKind::Vertex,
-        SourceLanguage::GLSL,
-        "main",
-    );
-
-    static ref FRAGMENT: StaticShaderInfo = StaticShaderInfo::new(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
-        ShaderKind::Fragment,
-        SourceLanguage::GLSL,
-        "main",
-    );
-
-    static ref SHADERS: rendy::shader::ShaderSetBuilder = rendy::shader::ShaderSetBuilder::default()
-        .with_vertex(&*VERTEX).unwrap()
-        .with_fragment(&*FRAGMENT).unwrap();
-}
-*/
-
 /// Data we need per instance.  DrawParam gets turned into this.
 /// We have to be *quite particular* about layout since this gets
 /// fed straight to the shader.
@@ -94,7 +75,6 @@ struct InstanceData {
 }
 
 use rendy::mesh::{Attribute, VertexFormat};
-use std::borrow::Cow;
 
 /// Okay, this tripped me up.  Instance data is technically
 /// part of the per-vertex data.  So we describe it as
@@ -470,6 +450,8 @@ struct Aux<B: gfx_hal::Backend> {
 
     draws: Vec<DrawCall<B>>,
     camera: UniformData,
+
+    shader: rendy::shader::ShaderSetBuilder,
 }
 
 const MAX_OBJECTS: usize = 10_000;
@@ -508,10 +490,13 @@ const fn ginstance_offset(instance_count: usize) -> u64 {
     guniform_offset() + UNIFORM_SIZE + (instance_count * size_of::<InstanceData>()) as u64
 }
 
+/// Okay, we NEED a default() method on this, 'cause it is
+/// constructed implicitly by `MeshRenderPipeline::builder()`.
+///
+/// If we don't use `SimpleGraphicsPipeline` then we may be able
+/// to avoid that.
 #[derive(Debug, Default)]
-struct MeshRenderPipelineDesc {
-    shader: rendy::shader::ShaderSetBuilder,
-}
+struct MeshRenderPipelineDesc;
 
 #[derive(Debug)]
 struct MeshRenderPipeline<B: gfx_hal::Backend> {
@@ -553,9 +538,8 @@ where
         ]
     }
 
-    fn load_shader_set(&self, factory: &mut Factory<B>, _aux: &Aux<B>) -> shader::ShaderSet<B> {
-        println!("Foo?");
-        self.shader.build(factory, Default::default()).unwrap()
+    fn load_shader_set(&self, factory: &mut Factory<B>, aux: &Aux<B>) -> shader::ShaderSet<B> {
+        aux.shader.build(factory, Default::default()).unwrap()
     }
 
     fn build<'a>(
@@ -657,14 +641,19 @@ where
         [0.0, 0.0, 0.0],
         [0.0, 100.0, 0.0],
         [100.0, 100.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [100.0, 100.0, 0.0],
+        //[0.0, 0.0, 0.0],
+        //[100.0, 100.0, 0.0],
         [100.0, 0.0, 0.0],
     ];
-    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 3, 4, 5]);
+    //let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 3, 4, 5]);
+    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 0, 2, 3]);
     // TODO: Mesh color... how do we want to handle this?
     // It's a bit of an open question in ggez as well, so.
     // For now the shader just uses the vertex color.
+    // It feels weird but ggez more or less requires both vertex
+    // colors and per-model colors.
+    // Unless you want to handle changing sprite colors by
+    // creating entirely new geometry for the sprite.
     let vertices: Vec<_> = verts
         .into_iter()
         .map(|v| PosColorNorm {
@@ -801,6 +790,8 @@ fn main() {
     let texture4 = make_texture(queue_id, &mut factory, heart_bytes);
     let object_mesh1 = make_quad_mesh(queue_id, &mut factory);
     // TODO: We should be able to share these, investigate further.
+    // Might have to arc 'em in the DrawCall, they're really only
+    // touched for binding descriptor sets, sooooo.
     let object_mesh2 = make_quad_mesh(queue_id, &mut factory);
     let object_mesh3 = make_quad_mesh(queue_id, &mut factory);
     let object_mesh4 = make_quad_mesh(queue_id, &mut factory);
@@ -826,6 +817,8 @@ fn main() {
 
             view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
+
+        shader: load_shaders(),
     };
 
     let mut graph = graph_builder
