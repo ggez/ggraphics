@@ -55,24 +55,9 @@ type Backend = rendy::metal::Backend;
 #[cfg(not(target_os = "macos"))]
 type Backend = rendy::vulkan::Backend;
 
+/*
 lazy_static::lazy_static! {
-    /*
-    static ref VERTEX: SpirvShader = StaticShaderInfo::new(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
-        ShaderKind::Vertex,
-        SourceLanguage::GLSL,
-        "main",
-    ).precompile().unwrap();
-
-    static ref FRAGMENT: SpirvShader = StaticShaderInfo::new(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
-        ShaderKind::Fragment,
-        SourceLanguage::GLSL,
-        "main",
-    ).precompile().unwrap();
-
-*/
-            static ref VERTEX: StaticShaderInfo = StaticShaderInfo::new(
+    static ref VERTEX: StaticShaderInfo = StaticShaderInfo::new(
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
         ShaderKind::Vertex,
         SourceLanguage::GLSL,
@@ -89,8 +74,8 @@ lazy_static::lazy_static! {
     static ref SHADERS: rendy::shader::ShaderSetBuilder = rendy::shader::ShaderSetBuilder::default()
         .with_vertex(&*VERTEX).unwrap()
         .with_fragment(&*FRAGMENT).unwrap();
-
 }
+*/
 
 /// Data we need per instance.  DrawParam gets turned into this.
 /// We have to be *quite particular* about layout since this gets
@@ -524,7 +509,9 @@ const fn ginstance_offset(instance_count: usize) -> u64 {
 }
 
 #[derive(Debug, Default)]
-struct MeshRenderPipelineDesc;
+struct MeshRenderPipelineDesc {
+    shader: rendy::shader::ShaderSetBuilder,
+}
 
 #[derive(Debug)]
 struct MeshRenderPipeline<B: gfx_hal::Backend> {
@@ -567,32 +554,8 @@ where
     }
 
     fn load_shader_set(&self, factory: &mut Factory<B>, _aux: &Aux<B>) -> shader::ShaderSet<B> {
-        SHADERS.build(factory, Default::default()).unwrap()
-        /*
-                storage.clear();
-
-                log::trace!("Load shader module VERTEX");
-                storage.push(unsafe { VERTEX.module(factory).unwrap() });
-
-                log::trace!("Load shader module FRAGMENT");
-                storage.push(unsafe { FRAGMENT.module(factory).unwrap() });
-
-                gfx_hal::pso::GraphicsShaderSet {
-                    vertex: gfx_hal::pso::EntryPoint {
-                        entry: "main",
-                        module: &storage[0],
-                        specialization: gfx_hal::pso::Specialization::default(),
-                    },
-                    fragment: Some(gfx_hal::pso::EntryPoint {
-                        entry: "main",
-                        module: &storage[1],
-                        specialization: gfx_hal::pso::Specialization::default(),
-                    }),
-                    hull: None,
-                    domain: None,
-                    geometry: None,
-                }
-        */
+        println!("Foo?");
+        self.shader.build(factory, Default::default()).unwrap()
     }
 
     fn build<'a>(
@@ -717,6 +680,30 @@ where
         .build(queue_id, &factory)
         .unwrap();
     m
+}
+
+fn load_shaders() -> rendy::shader::ShaderSetBuilder {
+    let vertex: StaticShaderInfo = StaticShaderInfo::new(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
+        ShaderKind::Vertex,
+        SourceLanguage::GLSL,
+        "main",
+    );
+
+    let fragment: StaticShaderInfo = StaticShaderInfo::new(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
+        ShaderKind::Fragment,
+        SourceLanguage::GLSL,
+        "main",
+    );
+
+    let shader_builder: rendy::shader::ShaderSetBuilder =
+        rendy::shader::ShaderSetBuilder::default()
+            .with_vertex(&vertex)
+            .unwrap()
+            .with_fragment(&fragment)
+            .unwrap();
+    shader_builder
 }
 
 fn main() {
