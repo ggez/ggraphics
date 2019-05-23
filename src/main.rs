@@ -15,6 +15,7 @@ Last+2 step is going to be having multiple pipelines/render passes with
 different shaders.
  */
 
+use std::sync::Arc;
 use std::{mem::size_of, time};
 
 use gfx_hal::PhysicalDevice as _;
@@ -364,6 +365,7 @@ where
             );
             draw_call
                 .mesh
+                .as_ref()
                 .bind(0, &[PosColorNorm::vertex()], encoder)
                 .expect("Could not bind mesh?");
             // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
@@ -402,8 +404,8 @@ where
     B: gfx_hal::Backend,
 {
     objects: Vec<InstanceData>,
-    mesh: Mesh<B>,
-    texture: Texture<B>,
+    mesh: Arc<Mesh<B>>,
+    texture: Arc<Texture<B>>,
     /// We just need the actual config for the sampler 'cause
     /// Rendy's `Factory` can manage a sampler cache itself.
     sampler_info: SamplerInfo,
@@ -413,7 +415,7 @@ impl<B> DrawCall<B>
 where
     B: gfx_hal::Backend,
 {
-    fn new(texture: Texture<B>, mesh: Mesh<B>) -> Self {
+    fn new(texture: Arc<Texture<B>>, mesh: Arc<Mesh<B>>) -> Self {
         let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
         Self {
             objects: vec![],
@@ -610,7 +612,11 @@ where
 }
 
 /// This is how we can load an image and create a new texture.
-fn make_texture<B>(queue_id: QueueId, factory: &mut Factory<B>, image_bytes: &[u8]) -> Texture<B>
+fn make_texture<B>(
+    queue_id: QueueId,
+    factory: &mut Factory<B>,
+    image_bytes: &[u8],
+) -> Arc<Texture<B>>
 where
     B: gfx_hal::Backend,
 {
@@ -629,7 +635,7 @@ where
             factory,
         )
         .unwrap();
-    texture
+    Arc::new(texture)
 }
 
 fn make_quad_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
@@ -774,11 +780,11 @@ fn main() {
         env!("CARGO_MANIFEST_DIR"),
         "/src/data/gfx_logo.png"
     ));
+    let heart_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
     let rust_bytes = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/src/data/rust_logo.png"
     ));
-    let heart_bytes = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
 
     let width = window_size.width as f32;
     let height = window_size.height as f32;
@@ -786,15 +792,9 @@ fn main() {
 
     let texture1 = make_texture(queue_id, &mut factory, gfx_bytes);
     let texture2 = make_texture(queue_id, &mut factory, rendy_bytes);
-    let texture3 = make_texture(queue_id, &mut factory, rust_bytes);
-    let texture4 = make_texture(queue_id, &mut factory, heart_bytes);
-    let object_mesh1 = make_quad_mesh(queue_id, &mut factory);
-    // TODO: We should be able to share these, investigate further.
-    // Might have to arc 'em in the DrawCall, they're really only
-    // touched for binding descriptor sets, sooooo.
-    let object_mesh2 = make_quad_mesh(queue_id, &mut factory);
-    let object_mesh3 = make_quad_mesh(queue_id, &mut factory);
-    let object_mesh4 = make_quad_mesh(queue_id, &mut factory);
+    let texture3 = make_texture(queue_id, &mut factory, heart_bytes);
+    let texture4 = make_texture(queue_id, &mut factory, rust_bytes);
+    let object_mesh = Arc::new(make_quad_mesh(queue_id, &mut factory));
 
     let align = factory
         .physical()
@@ -802,10 +802,10 @@ fn main() {
         .min_uniform_buffer_offset_alignment;
 
     let draws = vec![
-        DrawCall::new(texture1, object_mesh1),
-        DrawCall::new(texture2, object_mesh2),
-        DrawCall::new(texture3, object_mesh3),
-        DrawCall::new(texture4, object_mesh4),
+        DrawCall::new(texture1, object_mesh.clone()),
+        DrawCall::new(texture2, object_mesh.clone()),
+        DrawCall::new(texture3, object_mesh.clone()),
+        DrawCall::new(texture4, object_mesh.clone()),
     ];
     let mut aux = Aux {
         frames: frames as _,
