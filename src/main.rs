@@ -227,8 +227,6 @@ where
                 BufferInfo {
                     size: buffer_size,
                     usage: gfx_hal::buffer::Usage::UNIFORM
-                        // TODO: Can INDIRECT be removed?
-                        | gfx_hal::buffer::Usage::INDIRECT
                         | gfx_hal::buffer::Usage::VERTEX,
                 },
                 Dynamic,
@@ -545,7 +543,6 @@ where
         gfx_hal::pso::VertexInputRate,
     )> {
         vec![
-            // TODO: Double-check vertex input rate.
             PosColorNorm::vertex().gfx_vertex_input_desc(gfx_hal::pso::VertexInputRate::Vertex),
             InstanceData::vertex()
                 .gfx_vertex_input_desc(gfx_hal::pso::VertexInputRate::Instance(1)),
@@ -654,16 +651,12 @@ fn make_quad_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
 where
     B: gfx_hal::Backend,
 {
-    // TODO: Actually use indices right XD
     let verts: Vec<[f32; 3]> = vec![
         [0.0, 0.0, 0.0],
         [0.0, 100.0, 0.0],
         [100.0, 100.0, 0.0],
-        //[0.0, 0.0, 0.0],
-        //[100.0, 100.0, 0.0],
         [100.0, 0.0, 0.0],
     ];
-    //let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 3, 4, 5]);
     let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 0, 2, 3]);
     // TODO: Mesh color... how do we want to handle this?
     // It's a bit of an open question in ggez as well, so.
