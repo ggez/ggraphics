@@ -15,6 +15,11 @@ layout(set = 0, binding = 0) uniform Args {
     mat4 proj;
     mat4 view;
 };
+layout(push_constant) uniform PushConstantTest {
+    mat4 test1;
+    mat4 test2;
+}
+
 
 layout(location = 0) out vec4 frag_pos;
 layout(location = 1) out vec4 frag_color;

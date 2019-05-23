@@ -15,7 +15,10 @@ layout(std140, set = 0, binding = 0) uniform Args {
 };
 layout(set = 0, binding = 1) uniform texture2D colortex;
 layout(set = 0, binding = 2) uniform sampler colorsampler;
-
+layout(push_constant) uniform PushConstantTest {
+    mat4 test1;
+    mat4 test2;
+}
 
 void main() {
     color = texture(sampler2D(colortex, colorsampler), uv.xy) * frag_color;

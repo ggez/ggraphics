@@ -145,7 +145,7 @@ impl AsVertex for InstanceData {
 }
 
 /// Uniform data.  Each frame contains one of these.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 #[repr(C, align(16))]
 struct UniformData {
     proj: Transform3,
@@ -176,6 +176,7 @@ where
     descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
     /// Offsets in the buffer to start each draw call from.
     draw_offsets: Vec<u64>,
+    uniforms: UniformData,
 }
 
 impl<B> FrameInFlight<B>
@@ -226,8 +227,7 @@ where
             .create_buffer(
                 BufferInfo {
                     size: buffer_size,
-                    usage: gfx_hal::buffer::Usage::UNIFORM
-                        | gfx_hal::buffer::Usage::VERTEX,
+                    usage: gfx_hal::buffer::Usage::UNIFORM | gfx_hal::buffer::Usage::VERTEX,
                 },
                 Dynamic,
             )
@@ -238,6 +238,7 @@ where
             buffer,
             descriptor_sets,
             draw_offsets: vec![],
+            uniforms: UniformData::default(),
         };
         for draw_call in draw_calls {
             // all descriptor sets use the same layout
@@ -307,6 +308,9 @@ where
         _align: u64,
     ) {
         assert!(draw_calls.len() > 0);
+        // Store the uniforms to be shoved into push constants this frame
+        self.uniforms = *uniforms;
+
         let mut instance_count = 0;
         //println!("Preparing frame-in-flight, {} draw calls, first has {} instances.", draw_calls.len(),
         //draw_calls[0].objects.len());
@@ -374,6 +378,18 @@ where
                 std::iter::once((self.buffer.raw(), ginstance_offset(instance_count))),
             );
 
+            // Number of floats in the push constant
+            let mut push_constant_values = Vec::with_capacity(32);
+            push_constant_values.extend(self.uniforms.proj.to_row_major_array().as_ref());
+            push_constant_values.extend(self.uniforms.view.to_row_major_array().as_ref());
+            let converted_push_constants: Vec<u32> =
+                push_constant_values.into_iter().map(f32::to_bits).collect();
+            encoder.push_constants(
+                layout,
+                gfx_hal::pso::ShaderStageFlags::ALL,
+                0,
+                converted_push_constants.as_ref(),
+            );
             // The length of the mesh is the number of indices if it has any, the number
             // of verts otherwise.  See https://github.com/amethyst/rendy/issues/119
             let indices = 0..(draw_call.mesh.len() as u32);
@@ -522,16 +538,19 @@ where
             depth_bounds: false,
             stencil: gfx_hal::pso::StencilTest::Off,
         })
-
     }
 
     fn layout(&self) -> Layout {
         // TODO: Figure this stuff out.
         // Currently we just have all draw call's use the same Layout,
         // having a more sophisticated approach would be nice someday.
+        let push_constants = vec![(
+            gfx_hal::pso::ShaderStageFlags::ALL,
+            0..(size_of::<UniformData>() as u32),
+        )];
         Layout {
             sets: vec![FrameInFlight::<B>::get_descriptor_set_layout()],
-            push_constants: Vec::new(),
+            push_constants,
         }
     }
 
