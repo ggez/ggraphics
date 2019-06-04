@@ -173,6 +173,17 @@ struct UniformData {
 /// and descriptor sets and such and only change bits
 /// that aren't in use from other frames, but that's
 /// more complex than I want to get into right now.
+///
+/// When we do want to do that though, I think the simple
+/// way would be... maybe create a structure through which
+/// a FrameInFlight can be altered and which records if
+/// things have actually changed.  Actually, the DrawCall
+/// might the place to handle that?  Hm, having a separate
+/// Buffer per draw call might be the way to go too?  If
+/// the buffer does not change from one draw call to the
+/// next, we don't need to re-record its data, just issue
+/// the draw call directly with the right PrepareReuse...
+/// idk, I'm rambling.
 #[derive(Debug)]
 struct FrameInFlight<B>
 where
@@ -540,10 +551,31 @@ where
         subpass: hal::pass::Subpass<B>,
         aux: &Aux<B>,
     ) {
-        self.frames_in_flight[index].draw(&aux.draws, &self.set_layout, &mut encoder, aux.align);
+        // We own it, we can mutate it if we want, muahahahaha!
+        let mut encoder = encoder;
+        self.frames_in_flight[index].draw(
+            &aux.draws,
+            &self.pipeline_layout,
+            &mut encoder,
+            aux.align,
+        );
     }
 
-    fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &Aux<B>) {}
+    fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &Aux<B>) {
+        // Our Aux doesn't store any resources, I think!
+        // TODO: each FrameInFlight needs to be disposed of though.
+        //self.pipeline.dispose(factory, aux);
+
+        unsafe {
+            factory
+                .device()
+                .destroy_graphics_pipeline(self.graphics_pipeline);
+            factory
+                .device()
+                .destroy_pipeline_layout(self.pipeline_layout);
+            drop(self.set_layout);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -582,12 +614,15 @@ where
         let desc_set_layout = Handle::from(
             factory.create_descriptor_set_layout(FrameInFlight::<B>::LAYOUT.to_vec())?,
         );
+        /*
         let res = MeshRenderGroup {
             frames_in_flight: vec![],
             set_layout: desc_set_layout,
         };
 
         Ok(Box::new(res))
+         */
+        unimplemented!()
     }
 
     /*
