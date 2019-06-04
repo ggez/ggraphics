@@ -498,9 +498,17 @@ const fn ginstance_offset(instance_count: usize) -> u64 {
 }
 
 #[derive(Debug)]
-struct MeshRenderGroup;
+struct MeshRenderGroup<B>
+where
+    B: hal::Backend,
+{
+    frames_in_flight: Vec<FrameInFlight<B>>,
+    set_layout: Handle<DescriptorSetLayout<B>>,
+    pipeline_layout: B::PipelineLayout,
+    graphics_pipeline: B::GraphicsPipeline,
+}
 
-impl<B> RenderGroup<B, Aux<B>> for MeshRenderGroup
+impl<B> RenderGroup<B, Aux<B>> for MeshRenderGroup<B>
 where
     B: hal::Backend,
 {
@@ -509,9 +517,19 @@ where
         factory: &Factory<B>,
         queue: QueueId,
         index: usize,
-        subpass: hal::pass::Subpass<B>,
+        _subpass: hal::pass::Subpass<B>,
         aux: &Aux<B>,
     ) -> PrepareResult {
+        let align = aux.align;
+
+        self.frames_in_flight[index].prepare(
+            factory,
+            &aux.camera,
+            &aux.draws,
+            &self.set_layout,
+            align,
+        );
+
         PrepareResult::DrawReuse
     }
 
@@ -522,18 +540,33 @@ where
         subpass: hal::pass::Subpass<B>,
         aux: &Aux<B>,
     ) {
+        self.frames_in_flight[index].draw(&aux.draws, &self.set_layout, &mut encoder, aux.align);
     }
 
     fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &Aux<B>) {}
 }
 
 #[derive(Debug)]
-struct MeshRenderGroupDesc;
+struct MeshRenderGroupDesc {
+    colors: Vec<hal::pso::ColorBlendDesc>,
+}
+
+impl MeshRenderGroupDesc {
+    fn new() -> Self {
+        Self {
+            colors: vec![hal::pso::ColorBlendDesc(
+                hal::pso::ColorMask::ALL,
+                hal::pso::BlendState::ALPHA,
+            )],
+        }
+    }
+}
 
 impl<B> RenderGroupDesc<B, Aux<B>> for MeshRenderGroupDesc
 where
     B: hal::Backend,
 {
+    /// Creates the RenderGroup associated with this type.
     fn build(
         self,
         ctx: &GraphContext<B>,
@@ -546,7 +579,15 @@ where
         buffers: Vec<NodeBuffer>,
         images: Vec<NodeImage>,
     ) -> Result<Box<dyn RenderGroup<B, Aux<B>> + 'static>, failure::Error> {
-        Ok(Box::new(MeshRenderGroup))
+        let desc_set_layout = Handle::from(
+            factory.create_descriptor_set_layout(FrameInFlight::<B>::LAYOUT.to_vec())?,
+        );
+        let res = MeshRenderGroup {
+            frames_in_flight: vec![],
+            set_layout: desc_set_layout,
+        };
+
+        Ok(Box::new(res))
     }
 
     /*
@@ -563,15 +604,23 @@ where
     }
      */
 
+    /// Which buffers the render group uses.  Default
+    /// should be okay?
     fn buffers(&self) -> Vec<rendy::graph::BufferAccess> {
         vec![]
     }
+    /// Which images the render group uses. Default
+    /// should be okay?
     fn images(&self) -> Vec<rendy::graph::ImageAccess> {
         vec![]
     }
+
+    /// How many color blend desc's we use
     fn colors(&self) -> usize {
-        1
+        self.colors.len()
     }
+
+    /// Whether or not we use a depth buffer
     fn depth(&self) -> bool {
         true
     }
@@ -842,8 +891,20 @@ fn main() {
         )),
     );
 
+    /*
     let pass = graph_builder.add_node(
         MeshRenderPipeline::builder()
+            .into_subpass()
+            .with_color(color)
+            .with_depth_stencil(depth)
+            .into_pass(),
+    );
+     */
+
+    let render_group_desc = MeshRenderGroupDesc::new();
+    let pass = graph_builder.add_node(
+        render_group_desc
+            .builder()
             .into_subpass()
             .with_color(color)
             .with_depth_stencil(depth)
