@@ -273,7 +273,7 @@ where
             let set = factory.create_descriptor_set(layout.clone()).unwrap();
             factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
                 set: set.raw(),
-                binding: 0,
+                binding: 1,
                 array_offset: 0,
                 descriptors: vec![gfx_hal::pso::Descriptor::Image(
                     draw_call.texture.view().raw(),
@@ -282,7 +282,7 @@ where
             }));
             factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
                 set: set.raw(),
-                binding: 1,
+                binding: 2,
                 array_offset: 0,
                 descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
             }));

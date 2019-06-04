@@ -9,8 +9,8 @@ layout(location = 2) in vec4 uv;
 
 layout(location = 0) out vec4 color;
 
-layout(set = 0, binding = 0) uniform texture2D colortex;
-layout(set = 0, binding = 1) uniform sampler colorsampler;
+layout(set = 0, binding = 1) uniform texture2D colortex;
+layout(set = 0, binding = 2) uniform sampler colorsampler;
 layout(push_constant) uniform PushConstantTest {
     mat4 proj;
     mat4 view;
