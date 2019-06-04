@@ -1,31 +1,41 @@
 /*
 Okay, so the first step is going to be rendering multiple things with the same
-geometry and texture using instanced drawing.
+geometry and texture using instanced drawing.  DONE.
 
-Next step is to render things with different textures.
+Next step is to render things with different textures.  DONE.
 
 Last step is to render things with different textures and
-different geometry.
+different geometry.  Trivial to do currently but it would be nice
+to not re-bind the mesh descriptor if we don't have to...
+How much does that actually matter though?  Dunno.
 
 Last+1 step might be to make rendering quads a more efficient special case,
 for example by reifying the geometry in the vertex shader a la the Rendy
 quads example.
 
-Last+2 step is going to be having multiple pipelines/render passes with
+Last+2 step is going to be having multiple pipelines with
 different shaders.
- */
+
+Then actual last step will be to have multiple render passes with different
+render targets.
+
+ALSO, at some point we should stop using SimpleGraphicsPipeline, per
+viral, 'cause it's mostly intended for only the simplest of cases.
+RenderGroup is what gets us the full power.  Looks mostly similar in
+concept but with more fiddly bits to fill out.  Should be fine, right?
+*/
 
 use std::sync::Arc;
 use std::{mem::size_of, time};
 
-use gfx_hal::PhysicalDevice as _;
 use rendy::command::{QueueId, RenderPassEncoder};
 use rendy::factory::{Config, Factory, ImageState};
 use rendy::graph::{
     present::PresentNode, render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage,
 };
-use rendy::hal as gfx_hal;
+use rendy::hal;
 use rendy::hal::Device as _;
+use rendy::hal::PhysicalDevice as _;
 use rendy::memory::Dynamic;
 use rendy::mesh::{AsVertex, Mesh, PosColorNorm};
 use rendy::resource::{
@@ -91,32 +101,32 @@ impl AsVertex for InstanceData {
                 Attribute::new(
                     "Transform1",
                     0,
-                    gfx_hal::pso::Element {
-                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                    hal::pso::Element {
+                        format: hal::format::Format::Rgba32Sfloat,
                         offset: 0,
                     },
                 ),
                 Attribute::new(
                     "Transform2",
                     1,
-                    gfx_hal::pso::Element {
-                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                    hal::pso::Element {
+                        format: hal::format::Format::Rgba32Sfloat,
                         offset: 16,
                     },
                 ),
                 Attribute::new(
                     "Transform3",
                     0,
-                    gfx_hal::pso::Element {
-                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                    hal::pso::Element {
+                        format: hal::format::Format::Rgba32Sfloat,
                         offset: 32,
                     },
                 ),
                 Attribute::new(
                     "Transform4",
                     0,
-                    gfx_hal::pso::Element {
-                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                    hal::pso::Element {
+                        format: hal::format::Format::Rgba32Sfloat,
                         offset: 48,
                     },
                 ),
@@ -124,8 +134,8 @@ impl AsVertex for InstanceData {
                 Attribute::new(
                     "rect",
                     0,
-                    gfx_hal::pso::Element {
-                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                    hal::pso::Element {
+                        format: hal::format::Format::Rgba32Sfloat,
                         offset: 64,
                     },
                 ),
@@ -133,8 +143,8 @@ impl AsVertex for InstanceData {
                 Attribute::new(
                     "color",
                     0,
-                    gfx_hal::pso::Element {
-                        format: gfx_hal::format::Format::Rgba32Sfloat,
+                    hal::pso::Element {
+                        format: hal::format::Format::Rgba32Sfloat,
                         offset: 80,
                     },
                 ),
@@ -166,7 +176,7 @@ struct UniformData {
 #[derive(Debug)]
 struct FrameInFlight<B>
 where
-    B: gfx_hal::Backend,
+    B: hal::Backend,
 {
     /// The buffer where we store instance data.
     buffer: Escape<Buffer<B>>,
@@ -182,33 +192,33 @@ where
 
 impl<B> FrameInFlight<B>
 where
-    B: gfx_hal::Backend,
+    B: hal::Backend,
 {
     /// All our descriptor sets use the same layout.
     /// This one!  We have an instance buffer, an
     /// image, and a sampler.
-    const LAYOUT: &'static [gfx_hal::pso::DescriptorSetLayoutBinding] = &[
+    const LAYOUT: &'static [hal::pso::DescriptorSetLayoutBinding] = &[
         // TODO: Can we get rid of this uniform buffer since we use push constants?
         // Doesn't look like it, 'cause we use the buffer for our instance data too.
-        gfx_hal::pso::DescriptorSetLayoutBinding {
+        hal::pso::DescriptorSetLayoutBinding {
             binding: 0,
-            ty: gfx_hal::pso::DescriptorType::UniformBuffer,
+            ty: hal::pso::DescriptorType::UniformBuffer,
             count: 1,
-            stage_flags: gfx_hal::pso::ShaderStageFlags::GRAPHICS,
+            stage_flags: hal::pso::ShaderStageFlags::GRAPHICS,
             immutable_samplers: false,
         },
-        gfx_hal::pso::DescriptorSetLayoutBinding {
+        hal::pso::DescriptorSetLayoutBinding {
             binding: 1,
-            ty: gfx_hal::pso::DescriptorType::SampledImage,
+            ty: hal::pso::DescriptorType::SampledImage,
             count: 1,
-            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+            stage_flags: hal::pso::ShaderStageFlags::FRAGMENT,
             immutable_samplers: false,
         },
-        gfx_hal::pso::DescriptorSetLayoutBinding {
+        hal::pso::DescriptorSetLayoutBinding {
             binding: 2,
-            ty: gfx_hal::pso::DescriptorType::Sampler,
+            ty: hal::pso::DescriptorType::Sampler,
             count: 1,
-            stage_flags: gfx_hal::pso::ShaderStageFlags::FRAGMENT,
+            stage_flags: hal::pso::ShaderStageFlags::FRAGMENT,
             immutable_samplers: false,
         },
     ];
@@ -230,7 +240,7 @@ where
             .create_buffer(
                 BufferInfo {
                     size: buffer_size,
-                    usage: gfx_hal::buffer::Usage::UNIFORM | gfx_hal::buffer::Usage::VERTEX,
+                    usage: hal::buffer::Usage::UNIFORM | hal::buffer::Usage::VERTEX,
                 },
                 Dynamic,
             )
@@ -271,20 +281,20 @@ where
 
         unsafe {
             let set = factory.create_descriptor_set(layout.clone()).unwrap();
-            factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
                 set: set.raw(),
                 binding: 1,
                 array_offset: 0,
-                descriptors: vec![gfx_hal::pso::Descriptor::Image(
+                descriptors: vec![hal::pso::Descriptor::Image(
                     draw_call.texture.view().raw(),
-                    gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+                    hal::image::Layout::ShaderReadOnlyOptimal,
                 )],
             }));
-            factory.write_descriptor_sets(Some(gfx_hal::pso::DescriptorSetWrite {
+            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
                 set: set.raw(),
                 binding: 2,
                 array_offset: 0,
-                descriptors: vec![gfx_hal::pso::Descriptor::Sampler(sampler.raw())],
+                descriptors: vec![hal::pso::Descriptor::Sampler(sampler.raw())],
             }));
             self.descriptor_sets.push(set);
         }
@@ -375,7 +385,7 @@ where
 
             encoder.push_constants(
                 layout,
-                gfx_hal::pso::ShaderStageFlags::ALL,
+                hal::pso::ShaderStageFlags::ALL,
                 0,
                 &self.push_constants,
             );
@@ -404,7 +414,7 @@ where
 #[derive(Debug)]
 struct DrawCall<B>
 where
-    B: gfx_hal::Backend,
+    B: hal::Backend,
 {
     objects: Vec<InstanceData>,
     mesh: Arc<Mesh<B>>,
@@ -416,7 +426,7 @@ where
 
 impl<B> DrawCall<B>
 where
-    B: gfx_hal::Backend,
+    B: hal::Backend,
 {
     fn new(texture: Arc<Texture<B>>, mesh: Arc<Mesh<B>>) -> Self {
         let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
@@ -449,7 +459,7 @@ where
 }
 
 #[derive(Debug)]
-struct Aux<B: gfx_hal::Backend> {
+struct Aux<B: hal::Backend> {
     frames: usize,
     align: u64,
 
@@ -487,6 +497,86 @@ const fn ginstance_offset(instance_count: usize) -> u64 {
     (instance_count * size_of::<InstanceData>()) as u64
 }
 
+#[derive(Debug)]
+struct MeshRenderGroup;
+
+impl<B> RenderGroup<B, Aux<B>> for MeshRenderGroup
+where
+    B: hal::Backend,
+{
+    fn prepare(
+        &mut self,
+        factory: &Factory<B>,
+        queue: QueueId,
+        index: usize,
+        subpass: hal::pass::Subpass<B>,
+        aux: &Aux<B>,
+    ) -> PrepareResult {
+        PrepareResult::DrawReuse
+    }
+
+    fn draw_inline(
+        &mut self,
+        encoder: RenderPassEncoder<B>,
+        index: usize,
+        subpass: hal::pass::Subpass<B>,
+        aux: &Aux<B>,
+    ) {
+    }
+
+    fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &Aux<B>) {}
+}
+
+#[derive(Debug)]
+struct MeshRenderGroupDesc;
+
+impl<B> RenderGroupDesc<B, Aux<B>> for MeshRenderGroupDesc
+where
+    B: hal::Backend,
+{
+    fn build(
+        self,
+        ctx: &GraphContext<B>,
+        factory: &mut Factory<B>,
+        queue: QueueId,
+        aux: &Aux<B>,
+        framebuffer_width: u32,
+        framebuffer_height: u32,
+        subpass: hal::pass::Subpass<B>,
+        buffers: Vec<NodeBuffer>,
+        images: Vec<NodeImage>,
+    ) -> Result<Box<dyn RenderGroup<B, Aux<B>> + 'static>, failure::Error> {
+        Ok(Box::new(MeshRenderGroup))
+    }
+
+    /*
+    Can't implement this, see https://github.com/amethyst/rendy/issues/158
+    TODO: Once we have a resolution to the above issue, add it to rendy's docs.
+    fn builder(self) -> rendy::graph::DescBuilder<B, Aux<B>, Self> {
+        rendy::graph::DescBuilder {
+            desc: self,
+            buffers: Vec::new(),
+            images: Vec::new(),
+            dependencies: Vec::new(),
+            marker: std::marker::PhantomData,
+        }
+    }
+     */
+
+    fn buffers(&self) -> Vec<rendy::graph::BufferAccess> {
+        vec![]
+    }
+    fn images(&self) -> Vec<rendy::graph::ImageAccess> {
+        vec![]
+    }
+    fn colors(&self) -> usize {
+        1
+    }
+    fn depth(&self) -> bool {
+        true
+    }
+}
+
 /// Okay, we NEED a default() method on this, 'cause it is
 /// constructed implicitly by `MeshRenderPipeline::builder()`.
 ///
@@ -496,27 +586,27 @@ const fn ginstance_offset(instance_count: usize) -> u64 {
 struct MeshRenderPipelineDesc;
 
 #[derive(Debug)]
-struct MeshRenderPipeline<B: gfx_hal::Backend> {
+struct MeshRenderPipeline<B: hal::Backend> {
     frames_in_flight: Vec<FrameInFlight<B>>,
 }
 
 impl<B> SimpleGraphicsPipelineDesc<B, Aux<B>> for MeshRenderPipelineDesc
 where
-    B: gfx_hal::Backend,
+    B: hal::Backend,
 {
     type Pipeline = MeshRenderPipeline<B>;
 
-    fn depth_stencil(&self) -> Option<gfx_hal::pso::DepthStencilDesc> {
+    fn depth_stencil(&self) -> Option<hal::pso::DepthStencilDesc> {
         // The rendy default, except with LessEqual instead of just
         // Less.  This makes things with the exact same Z coord render
         // in draw-order with newer ones on top, with transparency.
-        Some(gfx_hal::pso::DepthStencilDesc {
-            depth: gfx_hal::pso::DepthTest::On {
-                fun: gfx_hal::pso::Comparison::LessEqual,
+        Some(hal::pso::DepthStencilDesc {
+            depth: hal::pso::DepthTest::On {
+                fun: hal::pso::Comparison::LessEqual,
                 write: true,
             },
             depth_bounds: false,
-            stencil: gfx_hal::pso::StencilTest::Off,
+            stencil: hal::pso::StencilTest::Off,
         })
     }
 
@@ -525,7 +615,7 @@ where
         // Currently we just have all draw call's use the same Layout,
         // having a more sophisticated approach would be nice someday.
         let push_constants = vec![(
-            gfx_hal::pso::ShaderStageFlags::ALL,
+            hal::pso::ShaderStageFlags::ALL,
             // Pretty sure the size of push constants is given in bytes,
             // but even putting nonsense sizes in here seems to make
             // the program run fine unless you put super extreme values in.
@@ -541,14 +631,13 @@ where
     fn vertices(
         &self,
     ) -> Vec<(
-        Vec<gfx_hal::pso::Element<gfx_hal::format::Format>>,
+        Vec<hal::pso::Element<hal::format::Format>>,
         u32,
-        gfx_hal::pso::VertexInputRate,
+        hal::pso::VertexInputRate,
     )> {
         vec![
-            PosColorNorm::vertex().gfx_vertex_input_desc(gfx_hal::pso::VertexInputRate::Vertex),
-            InstanceData::vertex()
-                .gfx_vertex_input_desc(gfx_hal::pso::VertexInputRate::Instance(1)),
+            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
+            InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
         ]
     }
 
@@ -584,7 +673,7 @@ where
 
 impl<B> SimpleGraphicsPipeline<B, Aux<B>> for MeshRenderPipeline<B>
 where
-    B: gfx_hal::Backend,
+    B: hal::Backend,
 {
     type Desc = MeshRenderPipelineDesc;
 
@@ -630,7 +719,7 @@ fn make_texture<B>(
     image_bytes: &[u8],
 ) -> Arc<Texture<B>>
 where
-    B: gfx_hal::Backend,
+    B: hal::Backend,
 {
     let cursor = std::io::Cursor::new(image_bytes);
     let texture_builder = rendy::texture::image::load_from_image(cursor, Default::default())
@@ -640,9 +729,9 @@ where
         .build(
             ImageState {
                 queue: queue_id,
-                stage: gfx_hal::pso::PipelineStage::FRAGMENT_SHADER,
-                access: gfx_hal::image::Access::SHADER_READ,
-                layout: gfx_hal::image::Layout::ShaderReadOnlyOptimal,
+                stage: hal::pso::PipelineStage::FRAGMENT_SHADER,
+                access: hal::image::Access::SHADER_READ,
+                layout: hal::image::Layout::ShaderReadOnlyOptimal,
             },
             factory,
         )
@@ -652,7 +741,7 @@ where
 
 fn make_quad_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
 where
-    B: gfx_hal::Backend,
+    B: hal::Backend,
 {
     let verts: Vec<[f32; 3]> = vec![
         [0.0, 0.0, 0.0],
@@ -736,22 +825,20 @@ fn main() {
         .unwrap()
         .to_physical(window.get_hidpi_factor());
 
-    let window_kind = gfx_hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
+    let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
     let color = graph_builder.create_image(
         window_kind,
         1,
         factory.get_surface_format(&surface),
-        Some(gfx_hal::command::ClearValue::Color(
-            [0.1, 0.2, 0.3, 1.0].into(),
-        )),
+        Some(hal::command::ClearValue::Color([0.1, 0.2, 0.3, 1.0].into())),
     );
 
     let depth = graph_builder.create_image(
         window_kind,
         1,
-        gfx_hal::format::Format::D16Unorm,
-        Some(gfx_hal::command::ClearValue::DepthStencil(
-            gfx_hal::command::ClearDepthStencil(1.0, 0),
+        hal::format::Format::D16Unorm,
+        Some(hal::command::ClearValue::DepthStencil(
+            hal::command::ClearDepthStencil(1.0, 0),
         )),
     );
 
