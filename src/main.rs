@@ -508,6 +508,7 @@ const fn ginstance_offset(instance_count: usize) -> u64 {
     (instance_count * size_of::<InstanceData>()) as u64
 }
 
+/*
 #[derive(Debug)]
 struct MeshRenderGroup<B>
 where
@@ -751,6 +752,7 @@ where
         true
     }
 }
+*/
 
 /// Render group that consist of simple graphics pipeline.
 #[derive(Debug)]
@@ -802,15 +804,15 @@ where
 
     fn build<'a>(
         self,
-        ctx: &GraphContext<B>,
+        _ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
-        queue: QueueId,
+        _queue: QueueId,
         aux: &Aux<B>,
         framebuffer_width: u32,
         framebuffer_height: u32,
         subpass: hal::pass::Subpass<'_, B>,
-        buffers: Vec<NodeBuffer>,
-        images: Vec<NodeImage>,
+        _buffers: Vec<NodeBuffer>,
+        _images: Vec<NodeImage>,
     ) -> Result<Box<dyn RenderGroup<B, Aux<B>>>, failure::Error> {
         log::trace!("Load shader sets for");
 
