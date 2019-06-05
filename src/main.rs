@@ -739,8 +739,13 @@ where
         // Apparently we're done with the shader set here anyway.
         shader_set.dispose(factory);
 
+        let mut frames_in_flight = vec![];
+        frames_in_flight.extend(
+            (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
+        );
+
         let res = MeshRenderGroup {
-            frames_in_flight: vec![],
+            frames_in_flight: frames_in_flight,
             set_layout: desc_set_layout,
             pipeline_layout: pipeline_layout,
             graphics_pipeline: graphics_pipeline,
