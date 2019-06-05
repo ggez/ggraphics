@@ -756,11 +756,11 @@ where
 
 /// Render group that consist of simple graphics pipeline.
 #[derive(Debug)]
-pub struct SimpleRenderGroup<B: hal::Backend, P> {
+pub struct SimpleRenderGroup<B: hal::Backend> {
     set_layouts: Vec<Handle<DescriptorSetLayout<B>>>,
     pipeline_layout: B::PipelineLayout,
     graphics_pipeline: B::GraphicsPipeline,
-    pipeline: P,
+    frames_in_flight: Vec<FrameInFlight<B>>,
 }
 
 /// Descriptor for simple render group.
@@ -961,35 +961,52 @@ where
             (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
         );
 
-        let pipeline = MeshRenderPipeline { frames_in_flight };
+        // let pipeline = MeshRenderPipeline {
+        //     frames_in_flight: frames_in_flight,
+        // };
+        // let mut frames_in_flight = vec![];
+        // frames_in_flight.extend(
+        //     (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
+        // );
 
         shader_set.dispose(factory);
 
-        Ok(Box::new(SimpleRenderGroup::<B, _> {
+        Ok(Box::new(SimpleRenderGroup::<B> {
             set_layouts,
             pipeline_layout,
             graphics_pipeline,
-            pipeline,
+            frames_in_flight,
         }))
     }
 }
 
-impl<B, T, P> RenderGroup<B, T> for SimpleRenderGroup<B, P>
+impl<B> RenderGroup<B, Aux<B>> for SimpleRenderGroup<B>
 where
     B: hal::Backend,
-    T: ?Sized,
-    P: SimpleGraphicsPipeline<B, T>,
 {
     fn prepare(
         &mut self,
         factory: &Factory<B>,
-        queue: QueueId,
+        _queue: QueueId,
         index: usize,
         _subpass: hal::pass::Subpass<'_, B>,
-        aux: &T,
+        aux: &Aux<B>,
     ) -> PrepareResult {
-        self.pipeline
-            .prepare(factory, queue, &self.set_layouts, index, aux)
+        // self.pipeline
+        //     .prepare(factory, queue, &self.set_layouts, index, aux)
+
+        let align = aux.align;
+
+        let layout = &self.set_layouts[0];
+        self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
+        // TODO: Investigate this more...
+        // Ooooooh in the example it always used the same draw command buffer 'cause it
+        // always did indirect drawing, and just modified the draw command in the data buffer.
+        // we're doing direct drawing now so we have to always re-record our drawing
+        // command buffers when they change -- and the number of instances always changes
+        // in this program, so!
+        //PrepareResult::DrawReuse
+        PrepareResult::DrawRecord
     }
 
     fn draw_inline(
@@ -997,15 +1014,21 @@ where
         mut encoder: RenderPassEncoder<'_, B>,
         index: usize,
         _subpass: hal::pass::Subpass<'_, B>,
-        aux: &T,
+        aux: &Aux<B>,
     ) {
         encoder.bind_graphics_pipeline(&self.graphics_pipeline);
-        self.pipeline
-            .draw(&self.pipeline_layout, encoder, index, aux);
+        // self.pipeline
+        //     .draw(&self.pipeline_layout, encoder, index, aux);
+        self.frames_in_flight[index].draw(
+            &aux.draws,
+            &self.pipeline_layout,
+            &mut encoder,
+            aux.align,
+        );
     }
 
-    fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &T) {
-        self.pipeline.dispose(factory, aux);
+    fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
+        // self.pipeline.dispose(factory, aux);
 
         unsafe {
             factory
@@ -1019,6 +1042,7 @@ where
     }
 }
 
+/*
 /// Okay, we NEED a default() method on this, 'cause it is
 /// constructed implicitly by `MeshRenderPipeline::builder()`.
 ///
@@ -1154,6 +1178,7 @@ where
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
 }
 
+*/
 fn push_vertex_desc(
     elements: &[hal::pso::Element<hal::format::Format>],
     stride: hal::pso::ElemStride,
