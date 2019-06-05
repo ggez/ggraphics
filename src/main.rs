@@ -42,7 +42,7 @@ use rendy::resource::{
     Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
     WrapMode,
 };
-use rendy::shader::{self, ShaderKind, SourceLanguage, StaticShaderInfo};
+use rendy::shader::{ShaderKind, SourceLanguage, StaticShaderInfo};
 use rendy::texture::Texture;
 
 use rand::distributions::{Distribution, Uniform};
@@ -526,7 +526,7 @@ where
     fn prepare(
         &mut self,
         factory: &Factory<B>,
-        queue: QueueId,
+        _queue: QueueId,
         index: usize,
         _subpass: hal::pass::Subpass<B>,
         aux: &Aux<B>,
@@ -548,7 +548,7 @@ where
         &mut self,
         encoder: RenderPassEncoder<B>,
         index: usize,
-        subpass: hal::pass::Subpass<B>,
+        _subpass: hal::pass::Subpass<B>,
         aux: &Aux<B>,
     ) {
         // We own it, we can mutate it if we want, muahahahaha!
@@ -561,7 +561,7 @@ where
         );
     }
 
-    fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &Aux<B>) {
+    fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
         // Our Aux doesn't store any resources, I think!
         // TODO: each FrameInFlight needs to be disposed of though.
         // But that might or might not be the responsibility of the Pipeline!
@@ -602,15 +602,15 @@ where
     /// Creates the RenderGroup associated with this type.
     fn build(
         self,
-        ctx: &GraphContext<B>,
+        _ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
-        queue: QueueId,
+        _queue: QueueId,
         aux: &Aux<B>,
         framebuffer_width: u32,
         framebuffer_height: u32,
         subpass: hal::pass::Subpass<B>,
-        buffers: Vec<NodeBuffer>,
-        images: Vec<NodeImage>,
+        _buffers: Vec<NodeBuffer>,
+        _images: Vec<NodeImage>,
     ) -> Result<Box<dyn RenderGroup<B, Aux<B>> + 'static>, failure::Error> {
         let desc_set_layout = Handle::from(
             factory.create_descriptor_set_layout(FrameInFlight::<B>::LAYOUT.to_vec())?,
@@ -743,7 +743,8 @@ where
         let frames = 3;
         let mut frames_in_flight = vec![];
         frames_in_flight.extend(
-            (0..frames).map(|_| FrameInFlight::new(factory, aux.align, &aux.draws, &desc_set_layout)),
+            (0..frames)
+                .map(|_| FrameInFlight::new(factory, aux.align, &aux.draws, &desc_set_layout)),
         );
 
         let res = MeshRenderGroup {
@@ -792,6 +793,8 @@ where
         true
     }
 }
+
+/*
 
 /// Okay, we NEED a default() method on this, 'cause it is
 /// constructed implicitly by `MeshRenderPipeline::builder()`.
@@ -927,7 +930,7 @@ where
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
 }
-
+*/
 /// This is how we can load an image and create a new texture.
 fn make_texture<B>(
     queue_id: QueueId,
