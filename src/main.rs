@@ -554,6 +554,7 @@ where
     ) {
         // We own it, we can mutate it if we want, muahahahaha!
         let mut encoder = encoder;
+        encoder.bind_graphics_pipeline(&self.graphics_pipeline);
         self.frames_in_flight[index].draw(
             &aux.draws,
             &self.pipeline_layout,
