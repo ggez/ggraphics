@@ -18,11 +18,6 @@ different shaders.
 
 Then actual last step will be to have multiple render passes with different
 render targets.
-
-ALSO, at some point we should stop using SimpleGraphicsPipeline, per
-viral, 'cause it's mostly intended for only the simplest of cases.
-RenderGroup is what gets us the full power.  Looks mostly similar in
-concept but with more fiddly bits to fill out.  Should be fine, right?
 */
 
 use std::sync::Arc;
@@ -42,7 +37,7 @@ use rendy::resource::{
     Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
     WrapMode,
 };
-use rendy::shader::{ShaderKind, ShaderSet, SourceLanguage, StaticShaderInfo};
+use rendy::shader::{ShaderKind, SourceLanguage, StaticShaderInfo};
 use rendy::texture::Texture;
 
 use rand::distributions::{Distribution, Uniform};
@@ -508,256 +503,9 @@ const fn ginstance_offset(instance_count: usize) -> u64 {
     (instance_count * size_of::<InstanceData>()) as u64
 }
 
-/*
-#[derive(Debug)]
-struct MeshRenderGroup<B>
-where
-    B: hal::Backend,
-{
-    frames_in_flight: Vec<FrameInFlight<B>>,
-    set_layout: Handle<DescriptorSetLayout<B>>,
-    pipeline_layout: B::PipelineLayout,
-    graphics_pipeline: B::GraphicsPipeline,
-}
-
-impl<B> RenderGroup<B, Aux<B>> for MeshRenderGroup<B>
-where
-    B: hal::Backend,
-{
-    fn prepare(
-        &mut self,
-        factory: &Factory<B>,
-        _queue: QueueId,
-        index: usize,
-        _subpass: hal::pass::Subpass<B>,
-        aux: &Aux<B>,
-    ) -> PrepareResult {
-        let align = aux.align;
-
-        self.frames_in_flight[index].prepare(
-            factory,
-            &aux.camera,
-            &aux.draws,
-            &self.set_layout,
-            align,
-        );
-
-        PrepareResult::DrawRecord
-    }
-
-    fn draw_inline(
-        &mut self,
-        encoder: RenderPassEncoder<B>,
-        index: usize,
-        _subpass: hal::pass::Subpass<B>,
-        aux: &Aux<B>,
-    ) {
-        // We own it, we can mutate it if we want, muahahahaha!
-        let mut encoder = encoder;
-        encoder.bind_graphics_pipeline(&self.graphics_pipeline);
-        self.frames_in_flight[index].draw(
-            &aux.draws,
-            &self.pipeline_layout,
-            &mut encoder,
-            aux.align,
-        );
-    }
-
-    fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
-        // Our Aux doesn't store any resources, I think!
-        // TODO: each FrameInFlight needs to be disposed of though.
-        // But that might or might not be the responsibility of the Pipeline!
-        //self.pipeline.dispose(factory, aux);
-
-        unsafe {
-            factory
-                .device()
-                .destroy_graphics_pipeline(self.graphics_pipeline);
-            factory
-                .device()
-                .destroy_pipeline_layout(self.pipeline_layout);
-            drop(self.set_layout);
-        }
-    }
-}
-
-#[derive(Debug)]
-struct MeshRenderGroupDesc {
-    colors: Vec<hal::pso::ColorBlendDesc>,
-}
-
-impl MeshRenderGroupDesc {
-    fn new() -> Self {
-        Self {
-            colors: vec![hal::pso::ColorBlendDesc(
-                hal::pso::ColorMask::ALL,
-                hal::pso::BlendState::ALPHA,
-            )],
-        }
-    }
-}
-
-impl<B> RenderGroupDesc<B, Aux<B>> for MeshRenderGroupDesc
-where
-    B: hal::Backend,
-{
-    /// Creates the RenderGroup associated with this type.
-    fn build(
-        self,
-        _ctx: &GraphContext<B>,
-        factory: &mut Factory<B>,
-        _queue: QueueId,
-        aux: &Aux<B>,
-        framebuffer_width: u32,
-        framebuffer_height: u32,
-        subpass: hal::pass::Subpass<B>,
-        _buffers: Vec<NodeBuffer>,
-        _images: Vec<NodeImage>,
-    ) -> Result<Box<dyn RenderGroup<B, Aux<B>> + 'static>, failure::Error> {
-        let desc_set_layout = Handle::from(
-            factory.create_descriptor_set_layout(FrameInFlight::<B>::LAYOUT.to_vec())?,
-        );
-        let push_constants_layout = vec![(
-            hal::pso::ShaderStageFlags::ALL,
-            0..(size_of::<UniformData>() as u32),
-        )];
-
-        let mut shader_set = aux.shader.build(factory, Default::default()).unwrap();
-        let pipeline_layout = unsafe {
-            factory
-                .device()
-                .create_pipeline_layout(vec![desc_set_layout.raw()], push_constants_layout)
-        }
-        .map_err(|e| {
-            shader_set.dispose(factory);
-            e
-        })?;
-
-        // TODO HERE, clean up vertex buffer stuff
-        // https://docs.rs/rendy-graph/0.2.0/src/rendy_graph/node/render/group/simple.rs.html#276
-        let mut vertex_buffers = vec![];
-        let mut attributes = vec![];
-        let vertices = vec![
-            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
-            InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
-        ];
-        for &(ref elemets, stride, rate) in &vertices {
-            push_vertex_desc(elemets, stride, rate, &mut vertex_buffers, &mut attributes);
-        }
-
-        // Now we actually create the pipeline...
-        let input_assembler = hal::pso::InputAssemblerDesc {
-            primitive: hal::Primitive::TriangleList,
-            primitive_restart: hal::pso::PrimitiveRestart::Disabled,
-        };
-        let blender = hal::pso::BlendDesc {
-            logic_op: None,
-            targets: vec![hal::pso::ColorBlendDesc(
-                hal::pso::ColorMask::ALL,
-                hal::pso::BlendState::ALPHA,
-            )],
-        };
-        let depth_stencil = hal::pso::DepthStencilDesc {
-            depth: hal::pso::DepthTest::On {
-                fun: hal::pso::Comparison::LessEqual,
-                write: true,
-            },
-            depth_bounds: false,
-            stencil: hal::pso::StencilTest::Off,
-        };
-
-        let rect = hal::pso::Rect {
-            x: 0,
-            y: 0,
-            w: framebuffer_width as i16,
-            h: framebuffer_height as i16,
-        };
-        // TODO: No idea what the heck a baked state is
-        let baked_states = hal::pso::BakedStates {
-            viewport: Some(hal::pso::Viewport {
-                rect,
-                depth: 0.0..1.0,
-            }),
-            scissor: Some(rect),
-            blend_color: None,
-            depth_bounds: None,
-        };
-
-        let pipeline_desc = hal::pso::GraphicsPipelineDesc {
-            // TODO: Handle error, dispose of shader set properly if necessary
-            shaders: shader_set.raw().unwrap(),
-            rasterizer: hal::pso::Rasterizer::FILL,
-            vertex_buffers,
-            attributes,
-            input_assembler,
-            blender,
-            depth_stencil,
-            multisampling: None,
-            baked_states,
-            layout: &pipeline_layout,
-            subpass,
-
-            flags: hal::pso::PipelineCreationFlags::empty(),
-            parent: hal::pso::BasePipeline::None,
-        };
-        let graphics_pipeline = unsafe {
-            // Iterator of pipeline descriptions, pipeline cache.
-            factory
-                .device()
-                .create_graphics_pipelines(Some(pipeline_desc), None)
-        }
-        // TODO: Cleanup.
-        // This returns a Vec of pipelines and we just pull the first one off.
-        .remove(0)?;
-        // TODO: Dispose of shader set if pipeline creation fails
-
-        // Apparently we're done with the shader set here anyway.
-        shader_set.dispose(factory);
-
-        // TODO: Find actual number of frames!!!
-        let frames = 3;
-        let mut frames_in_flight = vec![];
-        frames_in_flight.extend(
-            (0..frames)
-                .map(|_| FrameInFlight::new(factory, aux.align, &aux.draws, &desc_set_layout)),
-        );
-
-        let res = MeshRenderGroup {
-            frames_in_flight: frames_in_flight,
-            set_layout: desc_set_layout,
-            pipeline_layout: pipeline_layout,
-            graphics_pipeline: graphics_pipeline,
-        };
-
-        Ok(Box::new(res))
-    }
-
-    /// Which buffers the render group uses.  Default
-    /// should be okay?
-    fn buffers(&self) -> Vec<rendy::graph::BufferAccess> {
-        vec![]
-    }
-    /// Which images the render group uses. Default
-    /// should be okay?
-    fn images(&self) -> Vec<rendy::graph::ImageAccess> {
-        vec![]
-    }
-
-    /// How many color blend desc's we use
-    fn colors(&self) -> usize {
-        self.colors.len()
-    }
-
-    /// Whether or not we use a depth buffer
-    fn depth(&self) -> bool {
-        true
-    }
-}
-*/
-
 /// Render group that consist of simple graphics pipeline.
 #[derive(Debug)]
-pub struct SimpleRenderGroup<B: hal::Backend> {
+pub struct MeshRenderGroup<B: hal::Backend> {
     set_layouts: Vec<Handle<DescriptorSetLayout<B>>>,
     pipeline_layout: B::PipelineLayout,
     graphics_pipeline: B::GraphicsPipeline,
@@ -766,12 +514,12 @@ pub struct SimpleRenderGroup<B: hal::Backend> {
 
 /// Descriptor for simple render group.
 #[derive(Debug)]
-pub struct SimpleRenderGroupDesc {
+pub struct MeshRenderGroupDesc {
     // inner: MeshRenderPipelineDesc,
     colors: Vec<hal::pso::ColorBlendDesc>,
 }
 
-impl SimpleRenderGroupDesc {
+impl MeshRenderGroupDesc {
     fn new() -> Self {
         Self {
             // inner: MeshRenderPipelineDesc,
@@ -783,7 +531,7 @@ impl SimpleRenderGroupDesc {
     }
 }
 
-impl<B> RenderGroupDesc<B, Aux<B>> for SimpleRenderGroupDesc
+impl<B> RenderGroupDesc<B, Aux<B>> for MeshRenderGroupDesc
 where
     B: hal::Backend,
 {
@@ -819,8 +567,6 @@ where
 
         let mut shader_set = aux.shader.build(factory, Default::default()).unwrap();
 
-        // let pipeline = SimpleGraphicsPipelineDesc::<B, Aux<B>>::pipeline(&self.inner);
-
         let depth_stencil = hal::pso::DepthStencilDesc {
             depth: hal::pso::DepthTest::On {
                 fun: hal::pso::Comparison::LessEqual,
@@ -855,7 +601,7 @@ where
         ];
 
         let pipeline = Pipeline {
-            layout: layout, //SimpleGraphicsPipelineDesc::<B, Aux<B>>::layout(&self.inner),
+            layout: layout,
             vertices: vertices,
             colors: self.colors,
             depth_stencil,
@@ -947,13 +693,6 @@ where
             e
         })?;
 
-        // let pipeline = self
-        //     .inner
-        //     .build(ctx, factory, queue, aux, buffers, images, &set_layouts)
-        //     .map_err(|e| {
-        //         shader_set.dispose(factory);
-        //         e
-        //     })?;
         let (frames, align) = (aux.frames, aux.align);
 
         // Each `FrameInFlight` needs one descriptor set per draw call.
@@ -962,17 +701,9 @@ where
             (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
         );
 
-        // let pipeline = MeshRenderPipeline {
-        //     frames_in_flight: frames_in_flight,
-        // };
-        // let mut frames_in_flight = vec![];
-        // frames_in_flight.extend(
-        //     (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
-        // );
-
         shader_set.dispose(factory);
 
-        Ok(Box::new(SimpleRenderGroup::<B> {
+        Ok(Box::new(MeshRenderGroup::<B> {
             set_layouts,
             pipeline_layout,
             graphics_pipeline,
@@ -981,7 +712,7 @@ where
     }
 }
 
-impl<B> RenderGroup<B, Aux<B>> for SimpleRenderGroup<B>
+impl<B> RenderGroup<B, Aux<B>> for MeshRenderGroup<B>
 where
     B: hal::Backend,
 {
@@ -1043,143 +774,6 @@ where
     }
 }
 
-/*
-/// Okay, we NEED a default() method on this, 'cause it is
-/// constructed implicitly by `MeshRenderPipeline::builder()`.
-///
-/// If we don't use `SimpleGraphicsPipeline` then we may be able
-/// to avoid that.
-#[derive(Debug, Default)]
-struct MeshRenderPipelineDesc;
-
-#[derive(Debug)]
-struct MeshRenderPipeline<B: hal::Backend> {
-    frames_in_flight: Vec<FrameInFlight<B>>,
-}
-
-impl<B> SimpleGraphicsPipelineDesc<B, Aux<B>> for MeshRenderPipelineDesc
-where
-    B: hal::Backend,
-{
-    type Pipeline = MeshRenderPipeline<B>;
-
-    fn depth_stencil(&self) -> Option<hal::pso::DepthStencilDesc> {
-        // The rendy default, except with LessEqual instead of just
-        // Less.  This makes things with the exact same Z coord render
-        // in draw-order with newer ones on top, with transparency.
-        Some(hal::pso::DepthStencilDesc {
-            depth: hal::pso::DepthTest::On {
-                fun: hal::pso::Comparison::LessEqual,
-                write: true,
-            },
-            depth_bounds: false,
-            stencil: hal::pso::StencilTest::Off,
-        })
-    }
-
-    fn layout(&self) -> Layout {
-        // TODO: Figure this stuff out.
-        // Currently we just have all draw call's use the same Layout,
-        // having a more sophisticated approach would be nice someday.
-        let push_constants = vec![(
-            hal::pso::ShaderStageFlags::ALL,
-            // Pretty sure the size of push constants is given in bytes,
-            // but even putting nonsense sizes in here seems to make
-            // the program run fine unless you put super extreme values in.
-            // Thanks, NVidia.
-            0..(size_of::<UniformData>() as u32),
-        )];
-        Layout {
-            sets: vec![FrameInFlight::<B>::get_descriptor_set_layout()],
-            push_constants,
-        }
-    }
-
-    fn vertices(
-        &self,
-    ) -> Vec<(
-        Vec<hal::pso::Element<hal::format::Format>>,
-        u32,
-        hal::pso::VertexInputRate,
-    )> {
-        vec![
-            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
-            InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
-        ]
-    }
-
-    fn load_shader_set(&self, factory: &mut Factory<B>, aux: &Aux<B>) -> ShaderSet<B> {
-        aux.shader.build(factory, Default::default()).unwrap()
-    }
-
-    fn build<'a>(
-        self,
-        _ctx: &GraphContext<B>,
-        factory: &mut Factory<B>,
-        _queue: QueueId,
-        aux: &Aux<B>,
-        buffers: Vec<NodeBuffer>,
-        images: Vec<NodeImage>,
-        set_layouts: &[Handle<DescriptorSetLayout<B>>],
-    ) -> Result<MeshRenderPipeline<B>, failure::Error> {
-        assert!(buffers.is_empty());
-        assert!(images.is_empty());
-        assert_eq!(set_layouts.len(), 1);
-
-        let (frames, align) = (aux.frames, aux.align);
-
-        // Each `FrameInFlight` needs one descriptor set per draw call.
-        let mut frames_in_flight = vec![];
-        frames_in_flight.extend(
-            (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
-        );
-
-        Ok(MeshRenderPipeline { frames_in_flight })
-    }
-}
-
-impl<B> SimpleGraphicsPipeline<B, Aux<B>> for MeshRenderPipeline<B>
-where
-    B: hal::Backend,
-{
-    type Desc = MeshRenderPipelineDesc;
-
-    fn prepare(
-        &mut self,
-        factory: &Factory<B>,
-        _queue: QueueId,
-        set_layouts: &[Handle<DescriptorSetLayout<B>>],
-        index: usize,
-        aux: &Aux<B>,
-    ) -> PrepareResult {
-        let align = aux.align;
-
-        let layout = &set_layouts[0];
-        self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
-        // TODO: Investigate this more...
-        // Ooooooh in the example it always used the same draw command buffer 'cause it
-        // always did indirect drawing, and just modified the draw command in the data buffer.
-        // we're doing direct drawing now so we have to always re-record our drawing
-        // command buffers when they change -- and the number of instances always changes
-        // in this program, so!
-        //PrepareResult::DrawReuse
-        PrepareResult::DrawRecord
-    }
-
-    fn draw(
-        &mut self,
-        layout: &B::PipelineLayout,
-        mut encoder: RenderPassEncoder<'_, B>,
-        index: usize,
-        aux: &Aux<B>,
-    ) {
-        self.frames_in_flight[index].draw(&aux.draws, layout, &mut encoder, aux.align);
-    }
-
-    fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
-}
-
-*/
 fn push_vertex_desc(
     elements: &[hal::pso::Element<hal::format::Format>],
     stride: hal::pso::ElemStride,
@@ -1336,18 +930,7 @@ fn main() {
         )),
     );
 
-    /*
-    let pass = graph_builder.add_node(
-        MeshRenderPipeline::builder()
-            .into_subpass()
-            .with_color(color)
-            .with_depth_stencil(depth)
-            .into_pass(),
-    );
-     */
-
-    //let render_group_desc = MeshRenderGroupDesc::new();
-    let render_group_desc = SimpleRenderGroupDesc::new();
+    let render_group_desc = MeshRenderGroupDesc::new();
     let pass = graph_builder.add_node(
         render_group_desc
             .builder()
