@@ -408,6 +408,8 @@ where
             // `bind_vertex_buffers()` above, and the stride/size of an instance
             // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
+            dbg!(&indices);
+            dbg!(&instances);
             encoder.draw_indexed(indices, 0, instances);
             instance_count += draw_call.objects.len();
         }
@@ -731,8 +733,8 @@ where
                 .device()
                 .create_graphics_pipelines(Some(pipeline_desc), None)
         }
-        // TODO: Figure out wth this is for;
-        // why does this call return multiple pipelines?
+        // TODO: Cleanup.
+        // This returns a Vec of pipelines and we just pull the first one off.
         .remove(0)?;
         // TODO: Dispose of shader set if pipeline creation fails
 
@@ -756,21 +758,6 @@ where
 
         Ok(Box::new(res))
     }
-
-    /*
-    Can't implement this, see https://github.com/amethyst/rendy/issues/158
-    Do we need to?  Good question.
-    TODO: Once we have a resolution to the above issue, add it to rendy's docs.
-    fn builder(self) -> rendy::graph::DescBuilder<B, Aux<B>, Self> {
-        rendy::graph::DescBuilder {
-            desc: self,
-            buffers: Vec::new(),
-            images: Vec::new(),
-            dependencies: Vec::new(),
-            marker: std::marker::PhantomData,
-        }
-    }
-     */
 
     /// Which buffers the render group uses.  Default
     /// should be okay?
