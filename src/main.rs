@@ -408,8 +408,6 @@ where
             // `bind_vertex_buffers()` above, and the stride/size of an instance
             // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
-            dbg!(&indices);
-            dbg!(&instances);
             encoder.draw_indexed(indices, 0, instances);
             instance_count += draw_call.objects.len();
         }
@@ -765,30 +763,41 @@ pub struct SimpleRenderGroup<B: hal::Backend, P> {
 
 /// Descriptor for simple render group.
 #[derive(Debug)]
-pub struct SimpleRenderGroupDesc<P: std::fmt::Debug> {
-    inner: P,
+pub struct SimpleRenderGroupDesc {
+    // inner: MeshRenderPipelineDesc,
+    colors: Vec<hal::pso::ColorBlendDesc>,
 }
 
-impl<B, T, P> RenderGroupDesc<B, T> for SimpleRenderGroupDesc<P>
+impl SimpleRenderGroupDesc {
+    fn new() -> Self {
+        Self {
+            // inner: MeshRenderPipelineDesc,
+            colors: vec![hal::pso::ColorBlendDesc(
+                hal::pso::ColorMask::ALL,
+                hal::pso::BlendState::ALPHA,
+            )],
+        }
+    }
+}
+
+impl<B> RenderGroupDesc<B, Aux<B>> for SimpleRenderGroupDesc
 where
     B: hal::Backend,
-    T: ?Sized,
-    P: SimpleGraphicsPipelineDesc<B, T>,
 {
     fn buffers(&self) -> Vec<rendy::graph::BufferAccess> {
-        self.inner.buffers()
+        vec![]
     }
 
     fn images(&self) -> Vec<rendy::graph::ImageAccess> {
-        self.inner.images()
+        vec![]
     }
 
     fn colors(&self) -> usize {
-        self.inner.colors().len()
+        self.colors.len()
     }
 
     fn depth(&self) -> bool {
-        self.inner.depth_stencil().is_some()
+        true
     }
 
     fn build<'a>(
@@ -796,18 +805,59 @@ where
         ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
         queue: QueueId,
-        aux: &T,
+        aux: &Aux<B>,
         framebuffer_width: u32,
         framebuffer_height: u32,
         subpass: hal::pass::Subpass<'_, B>,
         buffers: Vec<NodeBuffer>,
         images: Vec<NodeImage>,
-    ) -> Result<Box<dyn RenderGroup<B, T>>, failure::Error> {
+    ) -> Result<Box<dyn RenderGroup<B, Aux<B>>>, failure::Error> {
         log::trace!("Load shader sets for");
 
-        let mut shader_set = self.inner.load_shader_set(factory, aux);
+        let mut shader_set = aux.shader.build(factory, Default::default()).unwrap();
 
-        let pipeline = self.inner.pipeline();
+        // let pipeline = SimpleGraphicsPipelineDesc::<B, Aux<B>>::pipeline(&self.inner);
+
+        let depth_stencil = hal::pso::DepthStencilDesc {
+            depth: hal::pso::DepthTest::On {
+                fun: hal::pso::Comparison::LessEqual,
+                write: true,
+            },
+            depth_bounds: false,
+            stencil: hal::pso::StencilTest::Off,
+        };
+        let input_assembler_desc = hal::pso::InputAssemblerDesc {
+            primitive: hal::Primitive::TriangleList,
+            primitive_restart: hal::pso::PrimitiveRestart::Disabled,
+        };
+
+        let layout = {
+            let push_constants = vec![(
+                hal::pso::ShaderStageFlags::ALL,
+                // Pretty sure the size of push constants is given in bytes,
+                // but even putting nonsense sizes in here seems to make
+                // the program run fine unless you put super extreme values in.
+                // Thanks, NVidia.
+                0..(size_of::<UniformData>() as u32),
+            )];
+            Layout {
+                sets: vec![FrameInFlight::<B>::get_descriptor_set_layout()],
+                push_constants,
+            }
+        };
+
+        let vertices = vec![
+            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
+            InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
+        ];
+
+        let pipeline = Pipeline {
+            layout: layout, //SimpleGraphicsPipelineDesc::<B, Aux<B>>::layout(&self.inner),
+            vertices: vertices,
+            colors: self.colors,
+            depth_stencil,
+            input_assembler_desc,
+        };
 
         let set_layouts = pipeline
             .layout
@@ -834,8 +884,6 @@ where
             shader_set.dispose(factory);
             e
         })?;
-
-        assert_eq!(pipeline.colors.len(), self.inner.colors().len());
 
         let mut vertex_buffers = Vec::new();
         let mut attributes = Vec::new();
@@ -896,13 +944,22 @@ where
             e
         })?;
 
-        let pipeline = self
-            .inner
-            .build(ctx, factory, queue, aux, buffers, images, &set_layouts)
-            .map_err(|e| {
-                shader_set.dispose(factory);
-                e
-            })?;
+        // let pipeline = self
+        //     .inner
+        //     .build(ctx, factory, queue, aux, buffers, images, &set_layouts)
+        //     .map_err(|e| {
+        //         shader_set.dispose(factory);
+        //         e
+        //     })?;
+        let (frames, align) = (aux.frames, aux.align);
+
+        // Each `FrameInFlight` needs one descriptor set per draw call.
+        let mut frames_in_flight = vec![];
+        frames_in_flight.extend(
+            (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
+        );
+
+        let pipeline = MeshRenderPipeline { frames_in_flight };
 
         shader_set.dispose(factory);
 
@@ -1262,9 +1319,7 @@ fn main() {
      */
 
     //let render_group_desc = MeshRenderGroupDesc::new();
-    let render_group_desc = SimpleRenderGroupDesc {
-        inner: MeshRenderPipelineDesc,
-    };
+    let render_group_desc = SimpleRenderGroupDesc::new();
     let pass = graph_builder.add_node(
         render_group_desc
             .builder()
