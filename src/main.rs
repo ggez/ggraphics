@@ -541,7 +541,7 @@ where
             align,
         );
 
-        PrepareResult::DrawReuse
+        PrepareResult::DrawRecord
     }
 
     fn draw_inline(
@@ -564,6 +564,7 @@ where
     fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &Aux<B>) {
         // Our Aux doesn't store any resources, I think!
         // TODO: each FrameInFlight needs to be disposed of though.
+        // But that might or might not be the responsibility of the Pipeline!
         //self.pipeline.dispose(factory, aux);
 
         unsafe {
@@ -614,19 +615,143 @@ where
         let desc_set_layout = Handle::from(
             factory.create_descriptor_set_layout(FrameInFlight::<B>::LAYOUT.to_vec())?,
         );
-        /*
+        let push_constants_layout = vec![(
+            hal::pso::ShaderStageFlags::ALL,
+            0..(size_of::<UniformData>() as u32),
+        )];
+
+        let mut shader_set = aux.shader.build(factory, Default::default()).unwrap();
+        let pipeline_layout = unsafe {
+            factory
+                .device()
+                .create_pipeline_layout(vec![desc_set_layout.raw()], push_constants_layout)
+        }
+        .map_err(|e| {
+            shader_set.dispose(factory);
+            e
+        })?;
+
+        // TODO HERE, clean up vertex buffer stuff
+        // https://docs.rs/rendy-graph/0.2.0/src/rendy_graph/node/render/group/simple.rs.html#276
+
+        fn push_vertex_desc(
+            elements: &[hal::pso::Element<hal::format::Format>],
+            stride: hal::pso::ElemStride,
+            rate: hal::pso::VertexInputRate,
+            vertex_buffers: &mut Vec<hal::pso::VertexBufferDesc>,
+            attributes: &mut Vec<hal::pso::AttributeDesc>,
+        ) {
+            let index = vertex_buffers.len() as hal::pso::BufferIndex;
+
+            vertex_buffers.push(hal::pso::VertexBufferDesc {
+                binding: index,
+                stride,
+                rate,
+            });
+
+            let mut location = attributes.last().map_or(0, |a| a.location + 1);
+            for &element in elements {
+                attributes.push(hal::pso::AttributeDesc {
+                    location,
+                    binding: index,
+                    element,
+                });
+                location += 1;
+            }
+        }
+
+        let mut vertex_buffers = vec![];
+        let mut attributes = vec![];
+        let vertices = vec![
+            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
+            InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
+        ];
+        for &(ref elemets, stride, rate) in &vertices {
+            push_vertex_desc(elemets, stride, rate, &mut vertex_buffers, &mut attributes);
+        }
+
+        // Now we actually create the pipeline...
+        let input_assembler = hal::pso::InputAssemblerDesc {
+            primitive: hal::Primitive::TriangleList,
+            primitive_restart: hal::pso::PrimitiveRestart::Disabled,
+        };
+        let blender = hal::pso::BlendDesc {
+            logic_op: None,
+            targets: vec![hal::pso::ColorBlendDesc(
+                hal::pso::ColorMask::ALL,
+                hal::pso::BlendState::ALPHA,
+            )],
+        };
+        let depth_stencil = hal::pso::DepthStencilDesc {
+            depth: hal::pso::DepthTest::On {
+                fun: hal::pso::Comparison::LessEqual,
+                write: true,
+            },
+            depth_bounds: false,
+            stencil: hal::pso::StencilTest::Off,
+        };
+
+        let rect = hal::pso::Rect {
+            x: 0,
+            y: 0,
+            w: framebuffer_width as i16,
+            h: framebuffer_height as i16,
+        };
+        // TODO: No idea what the heck a baked state is
+        let baked_states = hal::pso::BakedStates {
+            viewport: Some(hal::pso::Viewport {
+                rect,
+                depth: 0.0..1.0,
+            }),
+            scissor: Some(rect),
+            blend_color: None,
+            depth_bounds: None,
+        };
+
+        let pipeline_desc = hal::pso::GraphicsPipelineDesc {
+            // TODO: Handle error, dispose of shader set properly if necessary
+            shaders: shader_set.raw().unwrap(),
+            rasterizer: hal::pso::Rasterizer::FILL,
+            vertex_buffers,
+            attributes,
+            input_assembler,
+            blender,
+            depth_stencil,
+            multisampling: None,
+            baked_states,
+            layout: &pipeline_layout,
+            subpass,
+
+            flags: hal::pso::PipelineCreationFlags::empty(),
+            parent: hal::pso::BasePipeline::None,
+        };
+        let graphics_pipeline = unsafe {
+            // Iterator of pipeline descriptions, pipeline cache.
+            factory
+                .device()
+                .create_graphics_pipelines(Some(pipeline_desc), None)
+        }
+        // TODO: Figure out wth this is for;
+        // why does this call return multiple pipelines?
+        .remove(0)?;
+        // TODO: Dispose of shader set if pipeline creation fails
+
+        // Apparently we're done with the shader set here anyway.
+        shader_set.dispose(factory);
+
         let res = MeshRenderGroup {
             frames_in_flight: vec![],
             set_layout: desc_set_layout,
+            pipeline_layout: pipeline_layout,
+            graphics_pipeline: graphics_pipeline,
         };
 
         Ok(Box::new(res))
-         */
-        unimplemented!()
     }
 
     /*
     Can't implement this, see https://github.com/amethyst/rendy/issues/158
+    Do we need to?  Good question.
     TODO: Once we have a resolution to the above issue, add it to rendy's docs.
     fn builder(self) -> rendy::graph::DescBuilder<B, Aux<B>, Self> {
         rendy::graph::DescBuilder {
