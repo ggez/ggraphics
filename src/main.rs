@@ -53,16 +53,7 @@ use euclid;
 type Transform3 = euclid::Transform3D<f32>;
 type Rect = euclid::Rect<f32>;
 
-// TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
-// Perhaps.
-// For now though, this is okay if not great.
-// It WOULD be quite nice to be able to play with OpenGL and DX12 backends.
-//
-// TODO: We ALSO need to specify features to rendy to build these, so this doesn't even work currently.
-// For now we only ever specify Vulkan.
-//
-// Rendy doesn't currently work on gfx-rs's DX12 backend though, and the OpenGL backend
-// is still WIP, so...  I guess this is what we get.
+
 #[cfg(target_os = "macos")]
 type Backend = rendy::metal::Backend;
 
@@ -209,8 +200,6 @@ where
     /// This one!  We have an instance buffer, an
     /// image, and a sampler.
     const LAYOUT: &'static [hal::pso::DescriptorSetLayoutBinding] = &[
-        // TODO: Can we get rid of this uniform buffer since we use push constants?
-        // Doesn't look like it, 'cause we use the buffer for our instance data too.
         hal::pso::DescriptorSetLayoutBinding {
             binding: 0,
             ty: hal::pso::DescriptorType::UniformBuffer,
@@ -555,6 +544,13 @@ where
     ) {
         // We own it, we can mutate it if we want, muahahahaha!
         let mut encoder = encoder;
+        
+        // BUG HERE: We should have this here:
+        // encoder.bind_graphics_pipeline(&self.graphics_pipeline);
+        // Omitting this causes the vulkan validation layer to
+        // segfault in `draw_indexed()` on Linux X11 with NVidia
+        // drivers.
+        
         self.frames_in_flight[index].draw(
             &aux.draws,
             &self.pipeline_layout,
@@ -633,9 +629,6 @@ where
             e
         })?;
 
-        // TODO HERE, clean up vertex buffer stuff
-        // https://docs.rs/rendy-graph/0.2.0/src/rendy_graph/node/render/group/simple.rs.html#276
-
         fn push_vertex_desc(
             elements: &[hal::pso::Element<hal::format::Format>],
             stride: hal::pso::ElemStride,
@@ -699,7 +692,6 @@ where
             w: framebuffer_width as i16,
             h: framebuffer_height as i16,
         };
-        // TODO: No idea what the heck a baked state is
         let baked_states = hal::pso::BakedStates {
             viewport: Some(hal::pso::Viewport {
                 rect,
@@ -711,7 +703,6 @@ where
         };
 
         let pipeline_desc = hal::pso::GraphicsPipelineDesc {
-            // TODO: Handle error, dispose of shader set properly if necessary
             shaders: shader_set.raw().unwrap(),
             rasterizer: hal::pso::Rasterizer::FILL,
             vertex_buffers,
@@ -733,15 +724,11 @@ where
                 .device()
                 .create_graphics_pipelines(Some(pipeline_desc), None)
         }
-        // TODO: Cleanup.
-        // This returns a Vec of pipelines and we just pull the first one off.
         .remove(0)?;
-        // TODO: Dispose of shader set if pipeline creation fails
 
         // Apparently we're done with the shader set here anyway.
         shader_set.dispose(factory);
 
-        // TODO: Find actual number of frames!!!
         let frames = 3;
         let mut frames_in_flight = vec![];
         frames_in_flight.extend(
@@ -781,143 +768,6 @@ where
     }
 }
 
-/*
-
-/// Okay, we NEED a default() method on this, 'cause it is
-/// constructed implicitly by `MeshRenderPipeline::builder()`.
-///
-/// If we don't use `SimpleGraphicsPipeline` then we may be able
-/// to avoid that.
-#[derive(Debug, Default)]
-struct MeshRenderPipelineDesc;
-
-#[derive(Debug)]
-struct MeshRenderPipeline<B: hal::Backend> {
-    frames_in_flight: Vec<FrameInFlight<B>>,
-}
-
-impl<B> SimpleGraphicsPipelineDesc<B, Aux<B>> for MeshRenderPipelineDesc
-where
-    B: hal::Backend,
-{
-    type Pipeline = MeshRenderPipeline<B>;
-
-    fn depth_stencil(&self) -> Option<hal::pso::DepthStencilDesc> {
-        // The rendy default, except with LessEqual instead of just
-        // Less.  This makes things with the exact same Z coord render
-        // in draw-order with newer ones on top, with transparency.
-        Some(hal::pso::DepthStencilDesc {
-            depth: hal::pso::DepthTest::On {
-                fun: hal::pso::Comparison::LessEqual,
-                write: true,
-            },
-            depth_bounds: false,
-            stencil: hal::pso::StencilTest::Off,
-        })
-    }
-
-    fn layout(&self) -> Layout {
-        // TODO: Figure this stuff out.
-        // Currently we just have all draw call's use the same Layout,
-        // having a more sophisticated approach would be nice someday.
-        let push_constants = vec![(
-            hal::pso::ShaderStageFlags::ALL,
-            // Pretty sure the size of push constants is given in bytes,
-            // but even putting nonsense sizes in here seems to make
-            // the program run fine unless you put super extreme values in.
-            // Thanks, NVidia.
-            0..(size_of::<UniformData>() as u32),
-        )];
-        Layout {
-            sets: vec![FrameInFlight::<B>::get_descriptor_set_layout()],
-            push_constants,
-        }
-    }
-
-    fn vertices(
-        &self,
-    ) -> Vec<(
-        Vec<hal::pso::Element<hal::format::Format>>,
-        u32,
-        hal::pso::VertexInputRate,
-    )> {
-        vec![
-            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
-            InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
-        ]
-    }
-
-    fn load_shader_set(&self, factory: &mut Factory<B>, aux: &Aux<B>) -> shader::ShaderSet<B> {
-        aux.shader.build(factory, Default::default()).unwrap()
-    }
-
-    fn build<'a>(
-        self,
-        _ctx: &GraphContext<B>,
-        factory: &mut Factory<B>,
-        _queue: QueueId,
-        aux: &Aux<B>,
-        buffers: Vec<NodeBuffer>,
-        images: Vec<NodeImage>,
-        set_layouts: &[Handle<DescriptorSetLayout<B>>],
-    ) -> Result<MeshRenderPipeline<B>, failure::Error> {
-        assert!(buffers.is_empty());
-        assert!(images.is_empty());
-        assert_eq!(set_layouts.len(), 1);
-
-        let (frames, align) = (aux.frames, aux.align);
-
-        // Each `FrameInFlight` needs one descriptor set per draw call.
-        let mut frames_in_flight = vec![];
-        frames_in_flight.extend(
-            (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
-        );
-
-        Ok(MeshRenderPipeline { frames_in_flight })
-    }
-}
-
-impl<B> SimpleGraphicsPipeline<B, Aux<B>> for MeshRenderPipeline<B>
-where
-    B: hal::Backend,
-{
-    type Desc = MeshRenderPipelineDesc;
-
-    fn prepare(
-        &mut self,
-        factory: &Factory<B>,
-        _queue: QueueId,
-        set_layouts: &[Handle<DescriptorSetLayout<B>>],
-        index: usize,
-        aux: &Aux<B>,
-    ) -> PrepareResult {
-        let align = aux.align;
-
-        let layout = &set_layouts[0];
-        self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
-        // TODO: Investigate this more...
-        // Ooooooh in the example it always used the same draw command buffer 'cause it
-        // always did indirect drawing, and just modified the draw command in the data buffer.
-        // we're doing direct drawing now so we have to always re-record our drawing
-        // command buffers when they change -- and the number of instances always changes
-        // in this program, so!
-        //PrepareResult::DrawReuse
-        PrepareResult::DrawRecord
-    }
-
-    fn draw(
-        &mut self,
-        layout: &B::PipelineLayout,
-        mut encoder: RenderPassEncoder<'_, B>,
-        index: usize,
-        aux: &Aux<B>,
-    ) {
-        self.frames_in_flight[index].draw(&aux.draws, layout, &mut encoder, aux.align);
-    }
-
-    fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
-}
-*/
 /// This is how we can load an image and create a new texture.
 fn make_texture<B>(
     queue_id: QueueId,
@@ -956,13 +806,6 @@ where
         [100.0, 0.0, 0.0],
     ];
     let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 0, 2, 3]);
-    // TODO: Mesh color... how do we want to handle this?
-    // It's a bit of an open question in ggez as well, so.
-    // For now the shader just uses the vertex color.
-    // It feels weird but ggez more or less requires both vertex
-    // colors and per-model colors.
-    // Unless you want to handle changing sprite colors by
-    // creating entirely new geometry for the sprite.
     let vertices: Vec<_> = verts
         .into_iter()
         .map(|v| PosColorNorm {
