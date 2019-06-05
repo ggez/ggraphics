@@ -8,13 +8,17 @@ Last step is to render things with different textures and
 different geometry.  Trivial to do currently but it would be nice
 to not re-bind the mesh descriptor if we don't have to...
 How much does that actually matter though?  Dunno.
+DONE.
 
-Last+1 step might be to make rendering quads a more efficient special case,
-for example by reifying the geometry in the vertex shader a la the Rendy
-quads example.
+Time to clean up and refactor!
 
-Last+2 step is going to be having multiple pipelines with
+Last+1 step is going to be having multiple pipelines with
 different shaders.
+
+Last+2 step might be to make rendering quads a more efficient special case,
+for example by reifying the geometry in the vertex shader a la the Rendy
+quads example.  This might also be where we try to reduce
+descriptor swaps if possible.
 
 Then actual last step will be to have multiple render passes with different
 render targets.
@@ -862,6 +866,36 @@ where
     m
 }
 
+fn make_tri_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
+where
+    B: hal::Backend,
+{
+    let verts: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [50.0, 100.0, 0.0]];
+    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2]);
+    // TODO: Mesh color... how do we want to handle this?
+    // It's a bit of an open question in ggez as well, so.
+    // For now the shader just uses the vertex color.
+    // It feels weird but ggez more or less requires both vertex
+    // colors and per-model colors.
+    // Unless you want to handle changing sprite colors by
+    // creating entirely new geometry for the sprite.
+    let vertices: Vec<_> = verts
+        .into_iter()
+        .map(|v| PosColorNorm {
+            position: rendy::mesh::Position::from(v),
+            color: [1.0, 1.0, 1.0, 1.0].into(),
+            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
+        })
+        .collect();
+
+    let m = Mesh::<Backend>::builder()
+        .with_indices(indices)
+        .with_vertices(&vertices[..])
+        .build(queue_id, &factory)
+        .unwrap();
+    m
+}
+
 fn load_shaders() -> rendy::shader::ShaderSetBuilder {
     let vertex: StaticShaderInfo = StaticShaderInfo::new(
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
@@ -980,6 +1014,7 @@ fn main() {
     let texture3 = make_texture(queue_id, &mut factory, heart_bytes);
     let texture4 = make_texture(queue_id, &mut factory, rust_bytes);
     let object_mesh = Arc::new(make_quad_mesh(queue_id, &mut factory));
+    let tri_mesh = Arc::new(make_tri_mesh(queue_id, &mut factory));
 
     let align = factory
         .physical()
@@ -990,7 +1025,7 @@ fn main() {
         DrawCall::new(texture1, object_mesh.clone()),
         DrawCall::new(texture2, object_mesh.clone()),
         DrawCall::new(texture3, object_mesh.clone()),
-        DrawCall::new(texture4, object_mesh.clone()),
+        DrawCall::new(texture4, tri_mesh),
     ];
     let mut aux = Aux {
         frames: frames as _,
