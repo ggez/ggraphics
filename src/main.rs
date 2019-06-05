@@ -739,9 +739,11 @@ where
         // Apparently we're done with the shader set here anyway.
         shader_set.dispose(factory);
 
+        // TODO: Find actual number of frames!!!
+        let frames = 3;
         let mut frames_in_flight = vec![];
         frames_in_flight.extend(
-            (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
+            (0..frames).map(|_| FrameInFlight::new(factory, aux.align, &aux.draws, &desc_set_layout)),
         );
 
         let res = MeshRenderGroup {
