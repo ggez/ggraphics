@@ -42,7 +42,7 @@ use rendy::resource::{
     Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
     WrapMode,
 };
-use rendy::shader::{ShaderKind, SourceLanguage, StaticShaderInfo};
+use rendy::shader::{ShaderKind, ShaderSet, SourceLanguage, StaticShaderInfo};
 use rendy::texture::Texture;
 
 use rand::distributions::{Distribution, Uniform};
@@ -635,33 +635,6 @@ where
 
         // TODO HERE, clean up vertex buffer stuff
         // https://docs.rs/rendy-graph/0.2.0/src/rendy_graph/node/render/group/simple.rs.html#276
-
-        fn push_vertex_desc(
-            elements: &[hal::pso::Element<hal::format::Format>],
-            stride: hal::pso::ElemStride,
-            rate: hal::pso::VertexInputRate,
-            vertex_buffers: &mut Vec<hal::pso::VertexBufferDesc>,
-            attributes: &mut Vec<hal::pso::AttributeDesc>,
-        ) {
-            let index = vertex_buffers.len() as hal::pso::BufferIndex;
-
-            vertex_buffers.push(hal::pso::VertexBufferDesc {
-                binding: index,
-                stride,
-                rate,
-            });
-
-            let mut location = attributes.last().map_or(0, |a| a.location + 1);
-            for &element in elements {
-                attributes.push(hal::pso::AttributeDesc {
-                    location,
-                    binding: index,
-                    element,
-                });
-                location += 1;
-            }
-        }
-
         let mut vertex_buffers = vec![];
         let mut attributes = vec![];
         let vertices = vec![
@@ -781,7 +754,211 @@ where
     }
 }
 
-/*
+/// Render group that consist of simple graphics pipeline.
+#[derive(Debug)]
+pub struct SimpleRenderGroup<B: hal::Backend, P> {
+    set_layouts: Vec<Handle<DescriptorSetLayout<B>>>,
+    pipeline_layout: B::PipelineLayout,
+    graphics_pipeline: B::GraphicsPipeline,
+    pipeline: P,
+}
+
+/// Descriptor for simple render group.
+#[derive(Debug)]
+pub struct SimpleRenderGroupDesc<P: std::fmt::Debug> {
+    inner: P,
+}
+
+impl<B, T, P> RenderGroupDesc<B, T> for SimpleRenderGroupDesc<P>
+where
+    B: hal::Backend,
+    T: ?Sized,
+    P: SimpleGraphicsPipelineDesc<B, T>,
+{
+    fn buffers(&self) -> Vec<rendy::graph::BufferAccess> {
+        self.inner.buffers()
+    }
+
+    fn images(&self) -> Vec<rendy::graph::ImageAccess> {
+        self.inner.images()
+    }
+
+    fn colors(&self) -> usize {
+        self.inner.colors().len()
+    }
+
+    fn depth(&self) -> bool {
+        self.inner.depth_stencil().is_some()
+    }
+
+    fn build<'a>(
+        self,
+        ctx: &GraphContext<B>,
+        factory: &mut Factory<B>,
+        queue: QueueId,
+        aux: &T,
+        framebuffer_width: u32,
+        framebuffer_height: u32,
+        subpass: hal::pass::Subpass<'_, B>,
+        buffers: Vec<NodeBuffer>,
+        images: Vec<NodeImage>,
+    ) -> Result<Box<dyn RenderGroup<B, T>>, failure::Error> {
+        log::trace!("Load shader sets for");
+
+        let mut shader_set = self.inner.load_shader_set(factory, aux);
+
+        let pipeline = self.inner.pipeline();
+
+        let set_layouts = pipeline
+            .layout
+            .sets
+            .into_iter()
+            .map(|set| {
+                factory
+                    .create_descriptor_set_layout(set.bindings)
+                    .map(Handle::from)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| {
+                shader_set.dispose(factory);
+                e
+            })?;
+
+        let pipeline_layout = unsafe {
+            factory.device().create_pipeline_layout(
+                set_layouts.iter().map(|l| l.raw()),
+                pipeline.layout.push_constants,
+            )
+        }
+        .map_err(|e| {
+            shader_set.dispose(factory);
+            e
+        })?;
+
+        assert_eq!(pipeline.colors.len(), self.inner.colors().len());
+
+        let mut vertex_buffers = Vec::new();
+        let mut attributes = Vec::new();
+
+        for &(ref elemets, stride, rate) in &pipeline.vertices {
+            push_vertex_desc(elemets, stride, rate, &mut vertex_buffers, &mut attributes);
+        }
+
+        let rect = hal::pso::Rect {
+            x: 0,
+            y: 0,
+            w: framebuffer_width as i16,
+            h: framebuffer_height as i16,
+        };
+
+        let shaders = match shader_set.raw() {
+            Err(e) => {
+                shader_set.dispose(factory);
+                return Err(e);
+            }
+            Ok(s) => s,
+        };
+
+        let graphics_pipeline = unsafe {
+            factory.device().create_graphics_pipelines(
+                Some(hal::pso::GraphicsPipelineDesc {
+                    shaders,
+                    rasterizer: hal::pso::Rasterizer::FILL,
+                    vertex_buffers,
+                    attributes,
+                    input_assembler: pipeline.input_assembler_desc,
+                    blender: hal::pso::BlendDesc {
+                        logic_op: None,
+                        targets: pipeline.colors.clone(),
+                    },
+                    depth_stencil: pipeline.depth_stencil,
+                    multisampling: None,
+                    baked_states: hal::pso::BakedStates {
+                        viewport: Some(hal::pso::Viewport {
+                            rect,
+                            depth: 0.0..1.0,
+                        }),
+                        scissor: Some(rect),
+                        blend_color: None,
+                        depth_bounds: None,
+                    },
+                    layout: &pipeline_layout,
+                    subpass,
+                    flags: hal::pso::PipelineCreationFlags::empty(),
+                    parent: hal::pso::BasePipeline::None,
+                }),
+                None,
+            )
+        }
+        .remove(0)
+        .map_err(|e| {
+            shader_set.dispose(factory);
+            e
+        })?;
+
+        let pipeline = self
+            .inner
+            .build(ctx, factory, queue, aux, buffers, images, &set_layouts)
+            .map_err(|e| {
+                shader_set.dispose(factory);
+                e
+            })?;
+
+        shader_set.dispose(factory);
+
+        Ok(Box::new(SimpleRenderGroup::<B, _> {
+            set_layouts,
+            pipeline_layout,
+            graphics_pipeline,
+            pipeline,
+        }))
+    }
+}
+
+impl<B, T, P> RenderGroup<B, T> for SimpleRenderGroup<B, P>
+where
+    B: hal::Backend,
+    T: ?Sized,
+    P: SimpleGraphicsPipeline<B, T>,
+{
+    fn prepare(
+        &mut self,
+        factory: &Factory<B>,
+        queue: QueueId,
+        index: usize,
+        _subpass: hal::pass::Subpass<'_, B>,
+        aux: &T,
+    ) -> PrepareResult {
+        self.pipeline
+            .prepare(factory, queue, &self.set_layouts, index, aux)
+    }
+
+    fn draw_inline(
+        &mut self,
+        mut encoder: RenderPassEncoder<'_, B>,
+        index: usize,
+        _subpass: hal::pass::Subpass<'_, B>,
+        aux: &T,
+    ) {
+        encoder.bind_graphics_pipeline(&self.graphics_pipeline);
+        self.pipeline
+            .draw(&self.pipeline_layout, encoder, index, aux);
+    }
+
+    fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &T) {
+        self.pipeline.dispose(factory, aux);
+
+        unsafe {
+            factory
+                .device()
+                .destroy_graphics_pipeline(self.graphics_pipeline);
+            factory
+                .device()
+                .destroy_pipeline_layout(self.pipeline_layout);
+            drop(self.set_layouts);
+        }
+    }
+}
 
 /// Okay, we NEED a default() method on this, 'cause it is
 /// constructed implicitly by `MeshRenderPipeline::builder()`.
@@ -847,7 +1024,7 @@ where
         ]
     }
 
-    fn load_shader_set(&self, factory: &mut Factory<B>, aux: &Aux<B>) -> shader::ShaderSet<B> {
+    fn load_shader_set(&self, factory: &mut Factory<B>, aux: &Aux<B>) -> ShaderSet<B> {
         aux.shader.build(factory, Default::default()).unwrap()
     }
 
@@ -917,7 +1094,33 @@ where
 
     fn dispose(self, _factory: &mut Factory<B>, _aux: &Aux<B>) {}
 }
-*/
+
+fn push_vertex_desc(
+    elements: &[hal::pso::Element<hal::format::Format>],
+    stride: hal::pso::ElemStride,
+    rate: hal::pso::VertexInputRate,
+    vertex_buffers: &mut Vec<hal::pso::VertexBufferDesc>,
+    attributes: &mut Vec<hal::pso::AttributeDesc>,
+) {
+    let index = vertex_buffers.len() as hal::pso::BufferIndex;
+
+    vertex_buffers.push(hal::pso::VertexBufferDesc {
+        binding: index,
+        stride,
+        rate,
+    });
+
+    let mut location = attributes.last().map_or(0, |a| a.location + 1);
+    for &element in elements {
+        attributes.push(hal::pso::AttributeDesc {
+            location,
+            binding: index,
+            element,
+        });
+        location += 1;
+    }
+}
+
 /// This is how we can load an image and create a new texture.
 fn make_texture<B>(
     queue_id: QueueId,
@@ -1058,7 +1261,10 @@ fn main() {
     );
      */
 
-    let render_group_desc = MeshRenderGroupDesc::new();
+    //let render_group_desc = MeshRenderGroupDesc::new();
+    let render_group_desc = SimpleRenderGroupDesc {
+        inner: MeshRenderPipelineDesc,
+    };
     let pass = graph_builder.add_node(
         render_group_desc
             .builder()
