@@ -625,6 +625,9 @@ where
         let mut shader_set = aux.shader.build(factory, Default::default()).unwrap();
         // TODO: Make disposing of the shader set nicer.  Either store it, or have a wrapper
         // that disposes it on drop, or something.  Would that cause a double-borrow?
+        //
+        // Actually, think about this more in general, 'cause there's other structures that
+        // need similar handling: set_layouts, pipeline layouts, etc.
         let shaders = match shader_set.raw() {
             Err(e) => {
                 shader_set.dispose(factory);
