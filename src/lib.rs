@@ -564,8 +564,6 @@ where
     ) -> Result<Box<dyn RenderGroup<B, Aux<B>>>, failure::Error> {
         log::trace!("Load shader sets for");
 
-        let mut shader_set = aux.shader.build(factory, Default::default()).unwrap();
-
         let depth_stencil = hal::pso::DepthStencilDesc {
             depth: hal::pso::DepthTest::On {
                 fun: hal::pso::Comparison::LessEqual,
@@ -602,21 +600,13 @@ where
                     .create_descriptor_set_layout(set.bindings)
                     .map(Handle::from)
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| {
-                shader_set.dispose(factory);
-                e
-            })?;
+            .collect::<Result<Vec<_>, _>>()?;
 
         let pipeline_layout = unsafe {
             factory
                 .device()
                 .create_pipeline_layout(set_layouts.iter().map(|l| l.raw()), layout_push_constants)
-        }
-        .map_err(|e| {
-            shader_set.dispose(factory);
-            e
-        })?;
+        }?;
 
         let mut vertex_buffers = Vec::new();
         let mut attributes = Vec::new();
@@ -632,6 +622,9 @@ where
             h: framebuffer_height as i16,
         };
 
+        let mut shader_set = aux.shader.build(factory, Default::default()).unwrap();
+        // TODO: Make disposing of the shader set nicer.  Either store it, or have a wrapper
+        // that disposes it on drop, or something.  Would that cause a double-borrow?
         let shaders = match shader_set.raw() {
             Err(e) => {
                 shader_set.dispose(factory);
@@ -708,9 +701,6 @@ where
         _subpass: hal::pass::Subpass<'_, B>,
         aux: &Aux<B>,
     ) -> PrepareResult {
-        // self.pipeline
-        //     .prepare(factory, queue, &self.set_layouts, index, aux)
-
         let align = aux.align;
 
         let layout = &self.set_layouts[0];
@@ -733,8 +723,6 @@ where
         aux: &Aux<B>,
     ) {
         encoder.bind_graphics_pipeline(&self.graphics_pipeline);
-        // self.pipeline
-        //     .draw(&self.pipeline_layout, encoder, index, aux);
         self.frames_in_flight[index].draw(
             &aux.draws,
             &self.pipeline_layout,
@@ -744,8 +732,6 @@ where
     }
 
     fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
-        // self.pipeline.dispose(factory, aux);
-
         unsafe {
             factory
                 .device()
