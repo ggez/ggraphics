@@ -228,7 +228,6 @@ where
             immutable_samplers: false,
         },
     ];
-
     fn get_descriptor_set_layout() -> SetLayout {
         SetLayout {
             bindings: Self::LAYOUT.to_vec(),
@@ -580,37 +579,23 @@ where
             primitive_restart: hal::pso::PrimitiveRestart::Disabled,
         };
 
-        let layout = {
-            let push_constants = vec![(
-                hal::pso::ShaderStageFlags::ALL,
-                // Pretty sure the size of push constants is given in bytes,
-                // but even putting nonsense sizes in here seems to make
-                // the program run fine unless you put super extreme values in.
-                // Thanks, NVidia.
-                0..(size_of::<UniformData>() as u32),
-            )];
-            Layout {
-                sets: vec![FrameInFlight::<B>::get_descriptor_set_layout()],
-                push_constants,
-            }
-        };
+        let layout_sets = vec![FrameInFlight::<B>::get_descriptor_set_layout()];
+        let layout_push_constants = vec![(
+            hal::pso::ShaderStageFlags::ALL,
+            // Pretty sure the size of push constants is given in bytes,
+            // but even putting nonsense sizes in here seems to make
+            // the program run fine unless you put super extreme values in.
+            // Thanks, NVidia.
+            0..(size_of::<UniformData>() as u32),
+        )];
 
+        // vertices: std::vec::Vec<(std::vec::Vec<gfx_hal::pso::input_assembler::Element<gfx_hal::format::Format>>, u32, gfx_hal::pso::input_assembler::VertexInputRate)>
         let vertices = vec![
             PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
             InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
         ];
 
-        let pipeline = Pipeline {
-            layout: layout,
-            vertices: vertices,
-            colors: self.colors,
-            depth_stencil,
-            input_assembler_desc,
-        };
-
-        let set_layouts = pipeline
-            .layout
-            .sets
+        let set_layouts = layout_sets
             .into_iter()
             .map(|set| {
                 factory
@@ -624,10 +609,9 @@ where
             })?;
 
         let pipeline_layout = unsafe {
-            factory.device().create_pipeline_layout(
-                set_layouts.iter().map(|l| l.raw()),
-                pipeline.layout.push_constants,
-            )
+            factory
+                .device()
+                .create_pipeline_layout(set_layouts.iter().map(|l| l.raw()), layout_push_constants)
         }
         .map_err(|e| {
             shader_set.dispose(factory);
@@ -637,7 +621,7 @@ where
         let mut vertex_buffers = Vec::new();
         let mut attributes = Vec::new();
 
-        for &(ref elemets, stride, rate) in &pipeline.vertices {
+        for &(ref elemets, stride, rate) in &vertices {
             push_vertex_desc(elemets, stride, rate, &mut vertex_buffers, &mut attributes);
         }
 
@@ -663,12 +647,12 @@ where
                     rasterizer: hal::pso::Rasterizer::FILL,
                     vertex_buffers,
                     attributes,
-                    input_assembler: pipeline.input_assembler_desc,
+                    input_assembler: input_assembler_desc,
                     blender: hal::pso::BlendDesc {
                         logic_op: None,
-                        targets: pipeline.colors.clone(),
+                        targets: self.colors.clone(),
                     },
-                    depth_stencil: pipeline.depth_stencil,
+                    depth_stencil: depth_stencil,
                     multisampling: None,
                     baked_states: hal::pso::BakedStates {
                         viewport: Some(hal::pso::Viewport {
