@@ -118,6 +118,16 @@ fn main() {
         DrawCall::new(texture3, object_mesh.clone()),
         DrawCall::new(texture4, tri_mesh),
     ];
+
+    let vertex_src = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/data/shader.glslv"
+    ));
+    let fragment_src = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/data/shader.glslf"
+    ));
+
     let mut aux = Aux {
         frames: frames as _,
         align,
@@ -129,7 +139,7 @@ fn main() {
             view: Transform3::create_translation(0.0, 0.0, 10.0),
         },
 
-        shader: load_shaders(),
+        shader: load_shaders(vertex_src, fragment_src),
     };
 
     let mut graph = graph_builder

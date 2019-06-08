@@ -502,9 +502,89 @@ pub const fn ginstance_offset(instance_count: usize) -> u64 {
     (instance_count * size_of::<InstanceData>()) as u64
 }
 
+/// An instance buffer that bounds checks how many instances you can
+/// put into it.  Is not generic on the instance data type, just holds
+/// `InstanceData`.
+/// TODO: Make it resizeable someday.
+pub struct InstanceBuffer<B>
+where
+    B: hal::Backend,
+{
+    /// Capacity, in *number of instances*.
+    pub capacity: u64,
+    /// Number of instances currently in the buffer
+    pub length: u64,
+    /// Actual buffer object.
+    pub buffer: Escape<Buffer<B>>,
+}
+
+impl<B> InstanceBuffer<B>
+where
+    B: hal::Backend,
+{
+    /// Returns the size in bytes of a single instance for this type.
+    /// For now, this doesn't change, but it's convenient to have.
+    ///
+    /// This can't be a const fn yet, 'cause trait bounds.
+    /// See https://github.com/rust-lang/rust/issues/57563
+    pub fn instance_size(&self) -> u64 {
+        size_of::<InstanceData>() as u64
+    }
+
+    /// Returns the buffer size in bytes, rounded up
+    /// to the given alignment.
+    pub fn buffer_size(&self, align: u64) -> u64 {
+        (((self.instance_size() * self.capacity) - 1) / align + 1) * align
+    }
+
+    /// Returns an offset in bytes, pointing to free space right after
+    /// the given number of instances, or None if `idx >= self.capacity`
+    pub fn instance_offset(&self, idx: u64) -> Option<u64> {
+        if idx >= self.capacity {
+            None
+        } else {
+            Some(idx * self.instance_size())
+        }
+    }
+
+    /// Empties the buffer by setting the length to 0.
+    /// Capacity remains unchanged.
+    pub fn clear(&mut self) {
+        self.length = 0;
+    }
+
+    /// Copies the instance data in the given slice into the buffer.
+    /// Returns the offset at which it started if ok, or if the buffer
+    /// is not large enough returns Err.
+    pub fn add_slice(
+        &mut self,
+        factory: &mut Factory<B>,
+        instances: &[InstanceData],
+    ) -> Result<u64, ()> {
+        if self.length + (instances.len() as u64) >= self.capacity {
+            return Err(());
+        }
+        let offset = self.instance_offset(self.length).ok_or(())?;
+        // Vulkan doesn't seem to like zero-size copies very much.
+        if instances.len() > 0 {
+            unsafe {
+                factory
+                    .upload_visible_buffer(&mut self.buffer, offset, instances)
+                    .unwrap();
+            }
+        }
+        let len = self.length;
+        self.length = instances.len() as u64;
+        Ok(len)
+    }
+}
+
 /// Render group that consist of simple graphics pipeline.
 #[derive(Debug)]
-pub struct MeshRenderGroup<B: hal::Backend> {
+pub struct MeshRenderGroup<B>
+where
+    B: hal::Backend,
+{
     set_layouts: Vec<Handle<DescriptorSetLayout<B>>>,
     pipeline_layout: B::PipelineLayout,
     graphics_pipeline: B::GraphicsPipeline,
@@ -865,7 +945,10 @@ where
     m
 }
 
-pub fn load_shaders() -> rendy::shader::ShaderSetBuilder {
+/// Creates a shader builder from the given GLSL shader source texts.
+/// TODO: Needs updating once https://github.com/amethyst/rendy/pull/141
+/// is released.
+pub fn load_shaders(_vertex: &str, _fragment: &str) -> rendy::shader::ShaderSetBuilder {
     let vertex: StaticShaderInfo = StaticShaderInfo::new(
         concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
         ShaderKind::Vertex,
