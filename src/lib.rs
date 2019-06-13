@@ -161,6 +161,20 @@ pub struct UniformData {
 /// put into it.  Is not generic on the instance data type, just holds
 /// `InstanceData`.
 /// TODO: Make it resizeable someday.
+///
+/// The buffer in a `FrameInFlight`.
+///
+/// We pack data from multiple `DrawCall`'s together into one `Buffer`
+/// but each draw call can have a varying amount of instance data,
+/// so we end up with something like:
+///
+/// ```
+/// | Instances1 ... | Instances2 ... | ... | empty space |
+/// ```
+///
+/// Right now we have a fixed size buffer and just limit the number
+/// of objects in it.  TODO: Eventually someday we will grow the buffer
+/// as needed.  Maybe shrink it too?  Not sure about that.
 #[derive(Debug)]
 pub struct InstanceBuffer<B>
 where
@@ -199,6 +213,7 @@ where
             buffer,
         }
     }
+
     /// Returns the size in bytes of a single instance for this type.
     /// For now, this doesn't change, but it's convenient to have.
     ///
@@ -210,6 +225,7 @@ where
 
     /// Returns the buffer size in bytes, rounded up
     /// to the given alignment.
+    /// TODO: Are the alignment requirements for this necessary?
     pub fn buffer_size(&self, align: u64) -> u64 {
         (((Self::instance_size() * self.capacity) - 1) / align + 1) * align
     }
@@ -433,16 +449,17 @@ where
                 // buffer.
                 // Vulkan doesn't seem to like zero-size copies.
                 //println!("Uploading {} instance data to {}", draw_call.objects.len(), ginstance_offset(instance_count));
+                let offset: u64 = self.buffer.instance_offset(instance_count).unwrap();
                 if draw_call.objects.len() > 0 {
                     factory
                         .upload_visible_buffer(
                             self.buffer.inner_mut(),
-                            ginstance_offset(instance_count),
+                            offset,
                             &draw_call.objects[..],
                         )
                         .unwrap();
-                    self.draw_offsets.push(ginstance_offset(instance_count));
-                    instance_count += draw_call.objects.len();
+                    self.draw_offsets.push(offset);
+                    instance_count += draw_call.objects.len() as u64;
                 }
             }
         }
@@ -457,7 +474,7 @@ where
         _align: u64,
     ) {
         //println!("Drawing {} draw calls", draw_calls.len());
-        let mut instance_count = 0;
+        let mut instance_count: u64 = 0;
         for ((draw_call, descriptor_set), _draw_offset) in draw_calls
             .iter()
             .zip(&self.descriptor_sets)
@@ -484,7 +501,10 @@ where
             // bind_graphics_descriptor_sets().
             encoder.bind_vertex_buffers(
                 1,
-                std::iter::once((self.buffer.inner().raw(), ginstance_offset(instance_count))),
+                std::iter::once((
+                    self.buffer.inner().raw(),
+                    self.buffer.instance_offset(instance_count).unwrap(),
+                )),
             );
 
             encoder.push_constants(
@@ -502,7 +522,7 @@ where
             // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
             encoder.draw_indexed(indices, 0, instances);
-            instance_count += draw_call.objects.len();
+            instance_count += draw_call.objects.len() as u64;
         }
     }
 }
@@ -574,32 +594,6 @@ pub struct Aux<B: hal::Backend> {
 }
 
 const MAX_OBJECTS: usize = 10_000;
-const INSTANCES_SIZE: u64 = size_of::<InstanceData>() as u64 * MAX_OBJECTS as u64;
-
-/// The size of the buffer in a `FrameInFlight`.
-///
-/// We pack data from multiple `DrawCall`'s together into one `Buffer`
-/// but each draw call can have a varying amount of instance data,
-/// so we end up with something like:
-///
-/// ```
-/// | Instances1 ... | Instances2 ... | ... | empty space |
-/// ```
-///
-/// Right now we have a fixed size buffer and just limit the number
-/// of objects in it.  TODO: Eventually someday we will grow the buffer
-/// as needed.  Maybe shrink it too?  Not sure about that.
-pub const fn gbuffer_size(align: u64) -> u64 {
-    ((INSTANCES_SIZE - 1) / align + 1) * align
-}
-
-/// The offset pointing to free space right after the given number
-/// of instances.
-///
-/// TODO: Are there alignment requirements for this?
-pub const fn ginstance_offset(instance_count: usize) -> u64 {
-    (instance_count * size_of::<InstanceData>()) as u64
-}
 
 /// Render group that consist of simple graphics pipeline.
 #[derive(Debug)]
