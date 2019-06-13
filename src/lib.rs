@@ -157,6 +157,113 @@ pub struct UniformData {
     pub view: Transform3,
 }
 
+/// An instance buffer that bounds checks how many instances you can
+/// put into it.  Is not generic on the instance data type, just holds
+/// `InstanceData`.
+/// TODO: Make it resizeable someday.
+#[derive(Debug)]
+pub struct InstanceBuffer<B>
+where
+    B: hal::Backend,
+{
+    /// Capacity, in *number of instances*.
+    pub capacity: u64,
+    /// Number of instances currently in the buffer
+    pub length: u64,
+    /// Actual buffer object.
+    pub buffer: Escape<Buffer<B>>,
+}
+
+impl<B> InstanceBuffer<B>
+where
+    B: hal::Backend,
+{
+    /// Create a new empty instance buffer with the given
+    /// capacity in *number of instances*
+    pub fn new(capacity: u64, factory: &Factory<B>) -> Self {
+        let bytes_per_instance = Self::instance_size();
+        let buffer_size = capacity * bytes_per_instance;
+        let buffer = factory
+            .create_buffer(
+                BufferInfo {
+                    size: buffer_size,
+                    // TODO: We probably don't need usage::Uniform here anymore.  Confirm!
+                    usage: hal::buffer::Usage::UNIFORM | hal::buffer::Usage::VERTEX,
+                },
+                Dynamic,
+            )
+            .unwrap();
+        Self {
+            capacity,
+            length: 0,
+            buffer,
+        }
+    }
+    /// Returns the size in bytes of a single instance for this type.
+    /// For now, this doesn't change, but it's convenient to have.
+    ///
+    /// This can't be a const fn yet, 'cause trait bounds.
+    /// See https://github.com/rust-lang/rust/issues/57563
+    pub fn instance_size() -> u64 {
+        size_of::<InstanceData>() as u64
+    }
+
+    /// Returns the buffer size in bytes, rounded up
+    /// to the given alignment.
+    pub fn buffer_size(&self, align: u64) -> u64 {
+        (((Self::instance_size() * self.capacity) - 1) / align + 1) * align
+    }
+
+    /// Returns an offset in bytes, pointing to free space right after
+    /// the given number of instances, or None if `idx >= self.capacity`
+    pub fn instance_offset(&self, idx: u64) -> Option<u64> {
+        if idx >= self.capacity {
+            None
+        } else {
+            Some(idx * Self::instance_size())
+        }
+    }
+
+    /// Empties the buffer by setting the length to 0.
+    /// Capacity remains unchanged.
+    pub fn clear(&mut self) {
+        self.length = 0;
+    }
+
+    /// Copies the instance data in the given slice into the buffer.
+    /// Returns the offset at which it started if ok, or if the buffer
+    /// is not large enough returns Err.
+    pub fn add_slice(
+        &mut self,
+        factory: &mut Factory<B>,
+        instances: &[InstanceData],
+    ) -> Result<u64, ()> {
+        if self.length + (instances.len() as u64) >= self.capacity {
+            return Err(());
+        }
+        let offset = self.instance_offset(self.length).ok_or(())?;
+        // Vulkan doesn't seem to like zero-size copies very much.
+        if instances.len() > 0 {
+            unsafe {
+                factory
+                    .upload_visible_buffer(&mut self.buffer, offset, instances)
+                    .unwrap();
+            }
+        }
+        let len = self.length;
+        self.length = instances.len() as u64;
+        Ok(len)
+    }
+
+    pub fn inner(&self) -> &Buffer<B> {
+        &self.buffer
+    }
+
+    pub fn inner_mut(&mut self) -> &mut Buffer<B> {
+        &mut self.buffer
+    }
+}
+
 /// What data we need for each frame in flight.
 /// Rendy doesn't do any synchronization for us
 /// beyond guarenteeing that when we get a new frame
@@ -185,7 +292,7 @@ where
     B: hal::Backend,
 {
     /// The buffer where we store instance data.
-    buffer: Escape<Buffer<B>>,
+    buffer: InstanceBuffer<B>, //Escape<Buffer<B>>,
     /// One descriptor set per draw call we do.
     /// Also has the number of instances in that draw call,
     /// so we can find offsets.
@@ -240,17 +347,9 @@ where
         draw_calls: &[DrawCall<B>],
         descriptor_set: &Handle<DescriptorSetLayout<B>>,
     ) -> Self {
-        let buffer_size = gbuffer_size(align) * (draw_calls.len() as u64);
-        let buffer = factory
-            .create_buffer(
-                BufferInfo {
-                    size: buffer_size,
-                    usage: hal::buffer::Usage::UNIFORM | hal::buffer::Usage::VERTEX,
-                },
-                Dynamic,
-            )
-            .unwrap();
-
+        use std::convert::TryInto;
+        let buffer_count = MAX_OBJECTS * draw_calls.len();
+        let buffer = InstanceBuffer::new(buffer_count.try_into().unwrap(), factory);
         let descriptor_sets = vec![];
         let mut ret = Self {
             buffer,
@@ -337,7 +436,7 @@ where
                 if draw_call.objects.len() > 0 {
                     factory
                         .upload_visible_buffer(
-                            &mut self.buffer,
+                            self.buffer.inner_mut(),
                             ginstance_offset(instance_count),
                             &draw_call.objects[..],
                         )
@@ -385,7 +484,7 @@ where
             // bind_graphics_descriptor_sets().
             encoder.bind_vertex_buffers(
                 1,
-                std::iter::once((self.buffer.raw(), ginstance_offset(instance_count))),
+                std::iter::once((self.buffer.inner().raw(), ginstance_offset(instance_count))),
             );
 
             encoder.push_constants(
@@ -500,83 +599,6 @@ pub const fn gbuffer_size(align: u64) -> u64 {
 /// TODO: Are there alignment requirements for this?
 pub const fn ginstance_offset(instance_count: usize) -> u64 {
     (instance_count * size_of::<InstanceData>()) as u64
-}
-
-/// An instance buffer that bounds checks how many instances you can
-/// put into it.  Is not generic on the instance data type, just holds
-/// `InstanceData`.
-/// TODO: Make it resizeable someday.
-pub struct InstanceBuffer<B>
-where
-    B: hal::Backend,
-{
-    /// Capacity, in *number of instances*.
-    pub capacity: u64,
-    /// Number of instances currently in the buffer
-    pub length: u64,
-    /// Actual buffer object.
-    pub buffer: Escape<Buffer<B>>,
-}
-
-impl<B> InstanceBuffer<B>
-where
-    B: hal::Backend,
-{
-    /// Returns the size in bytes of a single instance for this type.
-    /// For now, this doesn't change, but it's convenient to have.
-    ///
-    /// This can't be a const fn yet, 'cause trait bounds.
-    /// See https://github.com/rust-lang/rust/issues/57563
-    pub fn instance_size(&self) -> u64 {
-        size_of::<InstanceData>() as u64
-    }
-
-    /// Returns the buffer size in bytes, rounded up
-    /// to the given alignment.
-    pub fn buffer_size(&self, align: u64) -> u64 {
-        (((self.instance_size() * self.capacity) - 1) / align + 1) * align
-    }
-
-    /// Returns an offset in bytes, pointing to free space right after
-    /// the given number of instances, or None if `idx >= self.capacity`
-    pub fn instance_offset(&self, idx: u64) -> Option<u64> {
-        if idx >= self.capacity {
-            None
-        } else {
-            Some(idx * self.instance_size())
-        }
-    }
-
-    /// Empties the buffer by setting the length to 0.
-    /// Capacity remains unchanged.
-    pub fn clear(&mut self) {
-        self.length = 0;
-    }
-
-    /// Copies the instance data in the given slice into the buffer.
-    /// Returns the offset at which it started if ok, or if the buffer
-    /// is not large enough returns Err.
-    pub fn add_slice(
-        &mut self,
-        factory: &mut Factory<B>,
-        instances: &[InstanceData],
-    ) -> Result<u64, ()> {
-        if self.length + (instances.len() as u64) >= self.capacity {
-            return Err(());
-        }
-        let offset = self.instance_offset(self.length).ok_or(())?;
-        // Vulkan doesn't seem to like zero-size copies very much.
-        if instances.len() > 0 {
-            unsafe {
-                factory
-                    .upload_visible_buffer(&mut self.buffer, offset, instances)
-                    .unwrap();
-            }
-        }
-        let len = self.length;
-        self.length = instances.len() as u64;
-        Ok(len)
-    }
 }
 
 /// Render group that consist of simple graphics pipeline.
