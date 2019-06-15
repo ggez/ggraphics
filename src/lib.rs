@@ -246,12 +246,16 @@ where
         self.length = 0;
     }
 
-    /// Copies the instance data in the given slice into the buffer.
+    /// Copies the instance data in the given slice into the buffer,
+    /// starting from the current end of it.
     /// Returns the offset at which it started if ok, or if the buffer
     /// is not large enough returns Err.
+    ///
+    /// TODO: Verify that this is safe and the bounds-checking
+    /// math is correct.
     pub fn add_slice(
         &mut self,
-        factory: &mut Factory<B>,
+        factory: &Factory<B>,
         instances: &[InstanceData],
     ) -> Result<u64, ()> {
         if self.length + (instances.len() as u64) >= self.capacity {
@@ -266,9 +270,8 @@ where
                     .unwrap();
             }
         }
-        let len = self.length;
-        self.length = instances.len() as u64;
-        Ok(len)
+        self.length += instances.len() as u64;
+        Ok(self.length)
     }
 
     pub fn inner(&self) -> &Buffer<B> {
@@ -313,8 +316,6 @@ where
     /// Also has the number of instances in that draw call,
     /// so we can find offsets.
     descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
-    /// Offsets in the buffer to start each draw call from.
-    draw_offsets: Vec<u64>,
     /// The frame's local copy of uniform data.
     push_constants: [u32; 32],
 }
@@ -370,7 +371,6 @@ where
         let mut ret = Self {
             buffer,
             descriptor_sets,
-            draw_offsets: vec![],
             push_constants: [0; 32],
         };
         for draw_call in draw_calls {
@@ -440,28 +440,14 @@ where
             self.push_constants[16 + i] = vl.to_bits();
         }
 
-        let mut instance_count = 0;
         //println!("Preparing frame-in-flight, {} draw calls, first has {} instances.", draw_calls.len(),
         //draw_calls[0].objects.len());
-        unsafe {
-            for draw_call in draw_calls {
-                // Upload the instances to the right offset in the
-                // buffer.
-                // Vulkan doesn't seem to like zero-size copies.
-                //println!("Uploading {} instance data to {}", draw_call.objects.len(), ginstance_offset(instance_count));
-                let offset: u64 = self.buffer.instance_offset(instance_count).unwrap();
-                if draw_call.objects.len() > 0 {
-                    factory
-                        .upload_visible_buffer(
-                            self.buffer.inner_mut(),
-                            offset,
-                            &draw_call.objects[..],
-                        )
-                        .unwrap();
-                    self.draw_offsets.push(offset);
-                    instance_count += draw_call.objects.len() as u64;
-                }
-            }
+        self.buffer.clear();
+        for draw_call in draw_calls {
+            let _offset = self
+                .buffer
+                .add_slice(factory, &draw_call.objects[..])
+                .unwrap();
         }
     }
 
@@ -475,11 +461,7 @@ where
     ) {
         //println!("Drawing {} draw calls", draw_calls.len());
         let mut instance_count: u64 = 0;
-        for ((draw_call, descriptor_set), _draw_offset) in draw_calls
-            .iter()
-            .zip(&self.descriptor_sets)
-            .zip(&self.draw_offsets)
-        {
+        for (draw_call, descriptor_set) in draw_calls.iter().zip(&self.descriptor_sets) {
             //println!("Drawing {:#?}, {:#?}, {}", draw_call, descriptor_set, draw_offset);
 
             // This is a bit weird, but basically tells the thing where to find the
