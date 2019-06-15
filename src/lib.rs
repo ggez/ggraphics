@@ -24,7 +24,7 @@ Then actual last step will be to have multiple render passes with different
 render targets.
 */
 
-use std::mem::size_of;
+use std::mem;
 use std::sync::Arc;
 
 use rendy::command::{QueueId, RenderPassEncoder};
@@ -214,13 +214,34 @@ where
         }
     }
 
+    /// Resizes the underlying buffer.  Does NOT copy the contents
+    /// of the old buffer (yet), new buffer is empty.
+    pub fn resize(&mut self, factory: &Factory<B>, new_capacity: u64) {
+        let buffer = factory
+            .create_buffer(
+                BufferInfo {
+                    size: new_capacity,
+                    // TODO: We probably don't need usage::Uniform here anymore.  Confirm!
+                    usage: hal::buffer::Usage::UNIFORM | hal::buffer::Usage::VERTEX,
+                },
+                Dynamic,
+            )
+            .unwrap();
+        let old_buffer = mem::replace(&mut self.buffer, buffer);
+        unsafe {
+            factory.destroy_relevant_buffer(Escape::unescape(old_buffer));
+        }
+        self.length = 0;
+        self.capacity = new_capacity;
+    }
+
     /// Returns the size in bytes of a single instance for this type.
     /// For now, this doesn't change, but it's convenient to have.
     ///
     /// This can't be a const fn yet, 'cause trait bounds.
     /// See https://github.com/rust-lang/rust/issues/57563
     pub fn instance_size() -> u64 {
-        size_of::<InstanceData>() as u64
+        mem::size_of::<InstanceData>() as u64
     }
 
     /// Returns the buffer size in bytes, rounded up
@@ -662,7 +683,7 @@ where
             // but even putting nonsense sizes in here seems to make
             // the program run fine unless you put super extreme values in.
             // Thanks, NVidia.
-            0..(size_of::<UniformData>() as u32),
+            0..(mem::size_of::<UniformData>() as u32),
         )];
 
         // vertices: std::vec::Vec<(std::vec::Vec<gfx_hal::pso::input_assembler::Element<gfx_hal::format::Format>>, u32, gfx_hal::pso::input_assembler::VertexInputRate)>
