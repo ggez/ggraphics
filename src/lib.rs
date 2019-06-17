@@ -488,12 +488,14 @@ where
             // This is a bit weird, but basically tells the thing where to find the
             // instance data.  The stride and such of the instance structure is
             // defined in the `AsVertex` definition.
+            unsafe {
             encoder.bind_graphics_descriptor_sets(
                 layout,
                 0,
                 std::iter::once(descriptor_set.raw()),
                 std::iter::empty(),
             );
+            }
             draw_call
                 .mesh
                 .as_ref()
@@ -502,6 +504,7 @@ where
             // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
             // to differentiate which *place* we're binding to; see the 0 in the
             // bind_graphics_descriptor_sets().
+            unsafe {
             encoder.bind_vertex_buffers(
                 1,
                 std::iter::once((
@@ -509,13 +512,15 @@ where
                     self.buffer.instance_offset(instance_count).unwrap(),
                 )),
             );
-
+            }
+            unsafe {
             encoder.push_constants(
                 layout,
                 hal::pso::ShaderStageFlags::ALL,
                 0,
                 &self.push_constants,
             );
+            }
             // The length of the mesh is the number of indices if it has any, the number
             // of verts otherwise.  See https://github.com/amethyst/rendy/issues/119
             let indices = 0..(draw_call.mesh.len() as u32);
@@ -524,7 +529,9 @@ where
             // `bind_vertex_buffers()` above, and the stride/size of an instance
             // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
-            encoder.draw_indexed(indices, 0, instances);
+            unsafe {
+                encoder.draw_indexed(indices, 0, instances);
+            }
             instance_count += draw_call.objects.len() as u64;
         }
     }
