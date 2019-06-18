@@ -489,12 +489,12 @@ where
             // instance data.  The stride and such of the instance structure is
             // defined in the `AsVertex` definition.
             unsafe {
-            encoder.bind_graphics_descriptor_sets(
-                layout,
-                0,
-                std::iter::once(descriptor_set.raw()),
-                std::iter::empty(),
-            );
+                encoder.bind_graphics_descriptor_sets(
+                    layout,
+                    0,
+                    std::iter::once(descriptor_set.raw()),
+                    std::iter::empty(),
+                );
             }
             draw_call
                 .mesh
@@ -505,21 +505,21 @@ where
             // to differentiate which *place* we're binding to; see the 0 in the
             // bind_graphics_descriptor_sets().
             unsafe {
-            encoder.bind_vertex_buffers(
-                1,
-                std::iter::once((
-                    self.buffer.inner().raw(),
-                    self.buffer.instance_offset(instance_count).unwrap(),
-                )),
-            );
+                encoder.bind_vertex_buffers(
+                    1,
+                    std::iter::once((
+                        self.buffer.inner().raw(),
+                        self.buffer.instance_offset(instance_count).unwrap(),
+                    )),
+                );
             }
             unsafe {
-            encoder.push_constants(
-                layout,
-                hal::pso::ShaderStageFlags::ALL,
-                0,
-                &self.push_constants,
-            );
+                encoder.push_constants(
+                    layout,
+                    hal::pso::ShaderStageFlags::ALL,
+                    0,
+                    &self.push_constants,
+                );
             }
             // The length of the mesh is the number of indices if it has any, the number
             // of verts otherwise.  See https://github.com/amethyst/rendy/issues/119
@@ -972,22 +972,43 @@ where
 }
 
 /// Creates a shader builder from the given GLSL shader source texts.
-/// TODO: Needs updating once https://github.com/amethyst/rendy/pull/141
-/// is released.
-pub fn load_shaders(_vertex: &str, _fragment: &str) -> rendy::shader::ShaderSetBuilder {
-    let vertex: StaticShaderInfo = StaticShaderInfo::new(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
+///
+/// Also takes names for the vertex and fragment shaders to be used
+/// in debugging output.
+pub fn load_shaders(
+    vertex_src: &str,
+    vertex_name: &str,
+    fragment_src: &str,
+    fragment_name: &str,
+) -> rendy::shader::ShaderSetBuilder {
+    use rendy::shader::SourceCodeShaderInfo;
+    let vertex = SourceCodeShaderInfo::new(
+        vertex_src,
+        vertex_name,
         ShaderKind::Vertex,
         SourceLanguage::GLSL,
         "main",
     );
-
-    let fragment: StaticShaderInfo = StaticShaderInfo::new(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
+    let fragment = SourceCodeShaderInfo::new(
+        fragment_src,
+        fragment_name,
         ShaderKind::Fragment,
         SourceLanguage::GLSL,
         "main",
     );
+    // let vertex: StaticShaderInfo = StaticShaderInfo::new(
+    //     concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
+    //     ShaderKind::Vertex,
+    //     SourceLanguage::GLSL,
+    //     "main",
+    // );
+
+    // let fragment: StaticShaderInfo = StaticShaderInfo::new(
+    //     concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
+    //     ShaderKind::Fragment,
+    //     SourceLanguage::GLSL,
+    //     "main",
+    // );
 
     let shader_builder: rendy::shader::ShaderSetBuilder =
         rendy::shader::ShaderSetBuilder::default()
@@ -996,4 +1017,18 @@ pub fn load_shaders(_vertex: &str, _fragment: &str) -> rendy::shader::ShaderSetB
             .with_fragment(&fragment)
             .unwrap();
     shader_builder
+}
+
+pub fn load_shader_files(
+    vertex_file: &str,
+    fragment_file: &str,
+) -> rendy::shader::ShaderSetBuilder {
+    let vertex_src = std::fs::read_to_string(vertex_file).unwrap();
+    let fragment_src = std::fs::read_to_string(fragment_file).unwrap();
+    load_shaders(
+        vertex_src.as_ref(),
+        vertex_file,
+        fragment_src.as_ref(),
+        fragment_file,
+    )
 }
