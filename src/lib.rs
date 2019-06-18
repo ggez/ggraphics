@@ -38,7 +38,7 @@ use rendy::resource::{
     Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
     WrapMode,
 };
-use rendy::shader::{ShaderKind, SourceLanguage, StaticShaderInfo};
+use rendy::shader::{ShaderKind, SourceLanguage};
 use rendy::texture::Texture;
 
 use rand::distributions::{Distribution, Uniform};
@@ -272,8 +272,7 @@ where
     /// Returns the offset at which it started if ok, or if the buffer
     /// is not large enough returns Err.
     ///
-    /// TODO: Verify that this is safe and the bounds-checking
-    /// math is correct.
+    /// TODO: Better error types.  Do bounds checks with assert_dbg!()?
     pub fn add_slice(
         &mut self,
         factory: &Factory<B>,
@@ -290,8 +289,8 @@ where
                     .upload_visible_buffer(&mut self.buffer, offset, instances)
                     .unwrap();
             }
+            self.length += instances.len() as u64;
         }
-        self.length += instances.len() as u64;
         Ok(self.length)
     }
 
@@ -668,8 +667,6 @@ where
         _buffers: Vec<NodeBuffer>,
         _images: Vec<NodeImage>,
     ) -> Result<Box<dyn RenderGroup<B, Aux<B>>>, failure::Error> {
-        log::trace!("Load shader sets for");
-
         let depth_stencil = hal::pso::DepthStencilDesc {
             depth: hal::pso::DepthTest::On {
                 fun: hal::pso::Comparison::LessEqual,
@@ -996,19 +993,6 @@ pub fn load_shaders(
         SourceLanguage::GLSL,
         "main",
     );
-    // let vertex: StaticShaderInfo = StaticShaderInfo::new(
-    //     concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv"),
-    //     ShaderKind::Vertex,
-    //     SourceLanguage::GLSL,
-    //     "main",
-    // );
-
-    // let fragment: StaticShaderInfo = StaticShaderInfo::new(
-    //     concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf"),
-    //     ShaderKind::Fragment,
-    //     SourceLanguage::GLSL,
-    //     "main",
-    // );
 
     let shader_builder: rendy::shader::ShaderSetBuilder =
         rendy::shader::ShaderSetBuilder::default()
@@ -1032,3 +1016,29 @@ pub fn load_shader_files(
         fragment_file,
     )
 }
+
+/*
+Exploring API
+
+pub struct Draw {
+    // Mesh, texture, sampler info instance data.
+}
+
+/// Roughly corresponds to a RenderGroup
+pub struct Pipeline {
+    // Draws
+// Uniforms
+// Shaders
+}
+
+pub struct GraphicsDevice {
+    // frames in flight...
+// descriptor sets...
+}
+
+impl GraphicsDevice {
+    pub fn add_draw(&mut self, mesh: (), texture: (), sampler_info: ()) {}
+}
+
+pub fn present() {}
+*/
