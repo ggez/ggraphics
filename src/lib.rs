@@ -1020,6 +1020,27 @@ pub fn load_shader_files(
 /*
 Exploring API
 
+General idea: render pass -> pipeline -> draw call -> instance
+
+From Viral:
+
+loop {
+  update_frame_data(); // This one writes into uniform buffers bound to frame level descriptor set
+  for pipeline in &pipelines {
+    pipeline.update_pipeline_specific_data(); // This one writes into uniform buffers bound to pipeline level descriptor set
+    for material in &pipeline.materials {
+      material.bind_material_descriptors_set();
+      for mesh in &material.meshes {
+        for object in &mesh.objects {
+          object.fill_instancing_data();
+        }
+        mesh.draw();
+      }
+    }
+  }
+}
+
+
 pub struct Draw {
     // Mesh, texture, sampler info instance data.
 }
@@ -1037,7 +1058,7 @@ pub struct GraphicsDevice {
 }
 
 impl GraphicsDevice {
-    pub fn add_draw(&mut self, mesh: (), texture: (), sampler_info: ()) {}
+    pub fn add_draw(&mut self, mesh: (), texture: (), sampler_info: (), instances: &[InstanceData]) {}
 }
 
 pub fn present() {}

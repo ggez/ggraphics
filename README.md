@@ -337,3 +337,61 @@ Depth buffer???
 
 Selectable backends
 
+# article
+
+
+```mermaid
+graph LR;
+    subgraph RenderGroup
+      subgraph Inputs
+        input1[Input buffer];
+        input2[Input buffer];
+        input3[...];
+      end
+      input1-->Render_Pass[Render pass];
+      input2-->Render_Pass;
+      input3-->Render_Pass;
+      Render_Pass-->OutputBuffer[Output buffer];
+    end
+
+    subgraph Render_Pass
+      subgraph Code
+        Shaders;
+        Subpasses;
+      end
+      Subpasses-->Pipeline;
+      Shaders-->Pipeline;
+
+      subgraph Data
+        Shader_Uniforms;
+        Vertex_Buffers;
+        Attribute_Buffers;
+        Push_Constants;
+      end
+      Shader_Uniforms-->Pipeline;
+      Vertex_Buffers-->Pipeline;
+      Attribute_Buffers-->Pipeline;
+      Push_Constants-->Pipeline;
+
+      subgraph Configuration
+        Depth_Stencil;
+        Multisampling;
+        DepthTest;
+        ScissorTest;
+      end
+      Depth_Stencil-->Pipeline;
+      Multisampling-->Pipeline;
+      DepthTest-->Pipeline;
+      ScissorTest-->Pipeline;
+
+      Pipeline-->Pipeline_Output_Buffers;
+    end
+
+    subgraph DrawCall
+      InstanceArray-->DrawCall;
+      Meshes-->DrawCall;
+      Textures-->DrawCall;
+      Samplers-->DrawCall;
+      DrawCall-->Buffers;
+    end
+```
