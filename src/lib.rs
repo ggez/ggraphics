@@ -877,11 +877,7 @@ pub fn push_vertex_desc(
 }
 
 /// This is how we can load an image and create a new texture.
-pub fn make_texture<B>(
-    queue_id: QueueId,
-    factory: &mut Factory<B>,
-    image_bytes: &[u8],
-) -> Arc<Texture<B>>
+pub fn make_texture<B>(device: &mut GraphicsDevice<B>, image_bytes: &[u8]) -> Arc<Texture<B>>
 where
     B: hal::Backend,
 {
@@ -892,18 +888,18 @@ where
     let texture = texture_builder
         .build(
             ImageState {
-                queue: queue_id,
+                queue: device.queue_id,
                 stage: hal::pso::PipelineStage::FRAGMENT_SHADER,
                 access: hal::image::Access::SHADER_READ,
                 layout: hal::image::Layout::ShaderReadOnlyOptimal,
             },
-            factory,
+            &mut device.factory,
         )
         .unwrap();
     Arc::new(texture)
 }
 
-pub fn make_quad_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
+pub fn make_quad_mesh<B>(device: &mut GraphicsDevice<B>) -> Mesh<B>
 where
     B: hal::Backend,
 {
@@ -933,7 +929,7 @@ where
     let m = Mesh::<Backend>::builder()
         .with_indices(indices)
         .with_vertices(&vertices[..])
-        .build(queue_id, &factory)
+        .build(device.queue_id, &device.factory)
         .unwrap();
     m
 }
@@ -1188,8 +1184,7 @@ where
     B: hal::Backend,
 {
     pub fn make_aux(
-        queue_id: QueueId,
-        factory: &mut Factory<B>,
+        device: &mut GraphicsDevice<B>,
         frames: u32,
         width: f32,
         height: f32,
@@ -1197,19 +1192,19 @@ where
         use hal::adapter::PhysicalDevice;
         let heart_bytes =
             include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
-        let texture1 = make_texture(queue_id, factory, heart_bytes);
-        let object_mesh = Arc::new(make_quad_mesh(queue_id, factory));
+        let texture1 = make_texture(device, heart_bytes);
+        let object_mesh = Arc::new(make_quad_mesh(device));
         let draws = vec![DrawCall::new(texture1, object_mesh.clone())];
 
         let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv");
         let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf");
 
-        let align = factory
+        let align = device
+            .factory
             .physical()
             .limits()
             .min_uniform_buffer_offset_alignment;
 
-        // TODO: AIEEE
         let width = width;
         let height = height;
         let aux = Aux {
@@ -1282,13 +1277,7 @@ where
         let frames = present_builder.image_count();
         graph_builder.add_node(present_builder);
 
-        let aux = Self::make_aux(
-            device.queue_id,
-            &mut device.factory,
-            frames,
-            size.width as f32,
-            size.height as f32,
-        );
+        let aux = Self::make_aux(&mut device, frames, size.width as f32, size.height as f32);
         let graph = graph_builder
             .with_frames_in_flight(frames)
             .build(&mut device.factory, &mut device.families, &aux)
