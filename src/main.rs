@@ -9,7 +9,7 @@
 use ggraphics::*;
 
 fn main() {
-    let mut x = new_vulkan_device();
+    let mut x: GraphicsWindowThing<rendy::vulkan::Backend> = GraphicsWindowThing::new();
     x.run();
     x.dispose();
 }
