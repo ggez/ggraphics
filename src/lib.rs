@@ -1095,6 +1095,58 @@ impl<B> GraphicsDevice<B>
 where
     B: hal::Backend,
 {
+    /*
+    Not sure this is useful after all...
+    We DO want to be able to modify the graph someday
+    and set up a new set of passes, but, not yet.
+    Issues to solve are how to handle the present node,
+    the color and depth buffers, etc.
+
+    Ok, the graph should separate out of this type.
+    Then we can also separat the winit window.
+
+    fn build_graph(&mut self) -> rendy::graph::Graph<B, Aux<B>> {
+        use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
+        let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
+
+        // let color = graph_builder.create_image(
+        //     window_kind,
+        //     1,
+        //     factory.get_surface_format(&surface),
+        //     Some(hal::command::ClearValue::Color([0.1, 0.2, 0.3, 1.0].into())),
+        // );
+        // let depth = graph_builder.create_image(
+        //     window_kind,
+        //     1,
+        //     hal::format::Format::D16Unorm,
+        //     Some(hal::command::ClearValue::DepthStencil(
+        //         hal::command::ClearDepthStencil(1.0, 0),
+        //     )),
+        // );
+        let render_group_desc = MeshRenderGroupDesc::new();
+        let pass = graph_builder.add_node(
+            render_group_desc
+                .builder()
+                .into_subpass()
+                .with_color(self.color)
+                .with_depth_stencil(self.depth)
+                .into_pass(),
+        );
+
+        let surface = self.factory.create_surface(&self.window);
+        let present_builder =
+            PresentNode::builder(&self.factory, surface, self.color).with_dependency(pass);
+
+        let frames = present_builder.image_count();
+        let graph = graph_builder
+            .with_frames_in_flight(self.frame_count)
+            .build(&mut self.factory, &mut self.families, &self.aux)
+            .unwrap();
+
+        graph
+    }
+    */
+
     pub fn new() -> Self {
         use rendy::factory::Config;
         use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
@@ -1111,10 +1163,6 @@ where
             .with_title("Rendy example")
             .build(&event_loop)
             .unwrap();
-        let window_size = window
-            .get_inner_size()
-            .unwrap()
-            .to_physical(window.get_hidpi_factor());
 
         event_loop.poll_events(|_| ());
 
@@ -1186,8 +1234,8 @@ where
             .limits()
             .min_uniform_buffer_offset_alignment;
 
-        let width = window_size.width as f32;
-        let height = window_size.height as f32;
+        let width = size.width as f32;
+        let height = size.height as f32;
         let aux = Aux {
             frames: frames as _,
             align,
@@ -1224,7 +1272,7 @@ where
 
     pub fn run(&mut self) {
         use std::time;
-        use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
+        use winit::{Event, WindowEvent};
 
         let mut frames = 0u64..;
         let mut rng = rand::thread_rng();
@@ -1266,24 +1314,101 @@ where
         );
     }
 
-    #[cfg(not(target_os = "macos"))]
-    pub fn new_vulkan() -> GraphicsDevice<rendy::vulkan::Backend> {
-        GraphicsDevice::new()
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn new_metal() -> GraphicsDevice<rendy::metal::Backend> {
-        GraphicsDevice::new()
-    }
-
     pub fn dispose(mut self) {
-        // TODO: This doesn't actually dispose of everything right
+        // TODO: This doesn't actually dispose of everything right.
+        // Why not?
         self.graph.dispose(&mut self.factory, &self.aux)
     }
 }
 
+pub struct GraphicsWindowThing<B>
+where
+    B: hal::Backend,
+{
+    // winit types
+    pub window: winit::Window,
+    pub event_loop: winit::EventsLoop,
+    pub graph: rendy::graph::Graph<B, Aux<B>>,
+}
+
+impl<B> GraphicsWindowThing<B>
+where
+    B: hal::Backend,
+{
+    pub fn new(dev: &mut GraphicsDevice<B>) -> Self {
+        use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
+        use winit::{EventsLoop, WindowBuilder};
+
+        let mut event_loop = EventsLoop::new();
+
+        let window = WindowBuilder::new()
+            .with_title("Rendy example")
+            .build(&event_loop)
+            .unwrap();
+
+        event_loop.poll_events(|_| ());
+
+        // let size = window
+        //     .get_inner_size()
+        //     .unwrap()
+        //     .to_physical(window.get_hidpi_factor());
+
+        let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
+        // let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
+
+        // let color = graph_builder.create_image(
+        //     window_kind,
+        //     1,
+        //     factory.get_surface_format(&surface),
+        //     Some(hal::command::ClearValue::Color([0.1, 0.2, 0.3, 1.0].into())),
+        // );
+        // let depth = graph_builder.create_image(
+        //     window_kind,
+        //     1,
+        //     hal::format::Format::D16Unorm,
+        //     Some(hal::command::ClearValue::DepthStencil(
+        //         hal::command::ClearDepthStencil(1.0, 0),
+        //     )),
+        // );
+        let render_group_desc = MeshRenderGroupDesc::new();
+        let pass = graph_builder.add_node(
+            render_group_desc
+                .builder()
+                .into_subpass()
+                .with_color(dev.color)
+                .with_depth_stencil(dev.depth)
+                .into_pass(),
+        );
+
+        let surface = dev.factory.create_surface(&window);
+        let present_builder =
+            PresentNode::builder(&dev.factory, surface, dev.color).with_dependency(pass);
+        graph_builder.add_node(present_builder);
+
+        // let frames = present_builder.image_count();
+        let graph = graph_builder
+            .with_frames_in_flight(dev.frame_count)
+            .build(&mut dev.factory, &mut dev.families, &dev.aux)
+            .unwrap();
+
+        Self {
+            window,
+            event_loop,
+            graph,
+        }
+    }
+}
+
+/// This is sorta squirrelly, it can't easily be a method
+/// without us having to specify the bacend type anyway,
+/// soooooo.
 #[cfg(not(target_os = "macos"))]
 pub fn new_vulkan_device() -> GraphicsDevice<rendy::vulkan::Backend> {
+    GraphicsDevice::new()
+}
+
+#[cfg(target_os = "macos")]
+pub fn new_metal_device() -> GraphicsDevice<rendy::metal::Backend> {
     GraphicsDevice::new()
 }
 
