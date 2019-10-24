@@ -41,12 +41,11 @@ use rendy::resource::{
 use rendy::shader::{ShaderKind, SourceLanguage};
 use rendy::texture::Texture;
 
-use rand::distributions::{Distribution, Uniform};
-
 use euclid;
+use oorandom;
 
-pub type Transform3 = euclid::Transform3D<f32>;
-pub type Rect = euclid::Rect<f32>;
+pub type Transform3 = euclid::Transform3D<f32, euclid::UnknownUnit, euclid::UnknownUnit>;
+pub type Rect = euclid::Rect<f32, euclid::UnknownUnit>;
 
 // TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
 // Perhaps.
@@ -571,12 +570,10 @@ where
         }
     }
 
-    pub fn add_object(&mut self, rng: &mut rand::rngs::ThreadRng, max_width: f32, max_height: f32) {
+    pub fn add_object(&mut self, rng: &mut oorandom::Rand32, max_width: f32, max_height: f32) {
         if self.objects.len() < MAX_OBJECTS {
-            let rx = Uniform::new(0.0, max_width);
-            let ry = Uniform::new(0.0, max_height);
-            let x = rx.sample(rng);
-            let y = ry.sample(rng);
+            let x = rng.rand_float() * max_width;
+            let y = rng.rand_float() * max_height;
             //println!("Adding object at {}x{}", x, y);
             let transform = Transform3::create_translation(x, y, -100.0);
             let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
@@ -1298,7 +1295,7 @@ where
         use winit::{Event, WindowEvent};
 
         let mut frames = 0u64..;
-        let mut rng = rand::thread_rng();
+        let mut rng = oorandom::Rand32::new(12345);
 
         let mut should_close = false;
 
