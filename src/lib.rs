@@ -40,6 +40,7 @@ use rendy::resource::{
 };
 use rendy::shader::{ShaderKind, SourceLanguage};
 use rendy::texture::Texture;
+use rendy::wsi::winit;
 
 use euclid;
 use oorandom;
@@ -624,10 +625,10 @@ impl MeshRenderGroupDesc {
     pub fn new() -> Self {
         Self {
             // inner: MeshRenderPipelineDesc,
-            colors: vec![hal::pso::ColorBlendDesc(
-                hal::pso::ColorMask::ALL,
-                hal::pso::BlendState::ALPHA,
-            )],
+            colors: vec![hal::pso::ColorBlendDesc {
+                mask: hal::pso::ColorMask::ALL,
+                blend: Some(hal::pso::BlendState::ALPHA),
+            }],
         }
     }
 }
@@ -665,12 +666,12 @@ where
         _images: Vec<NodeImage>,
     ) -> Result<Box<dyn RenderGroup<B, Aux<B>>>, failure::Error> {
         let depth_stencil = hal::pso::DepthStencilDesc {
-            depth: hal::pso::DepthTest::On {
+            depth: Some(hal::pso::DepthTest {
                 fun: hal::pso::Comparison::LessEqual,
                 write: true,
-            },
+            }),
             depth_bounds: false,
-            stencil: hal::pso::StencilTest::Off,
+            stencil: None,
         };
         let input_assembler_desc = hal::pso::InputAssemblerDesc {
             primitive: hal::Primitive::TriangleList,
