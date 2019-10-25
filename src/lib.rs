@@ -24,6 +24,7 @@ Then actual last step will be to have multiple render passes with different
 render targets.
 */
 
+use std::io;
 use std::mem;
 use std::sync::Arc;
 
@@ -38,7 +39,6 @@ use rendy::resource::{
     Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
     WrapMode,
 };
-use rendy::shader::{ShaderKind, SourceLanguage};
 use rendy::texture::Texture;
 use rendy::wsi::winit;
 
@@ -966,31 +966,17 @@ where
 ///
 /// Also takes names for the vertex and fragment shaders to be used
 /// in debugging output.
-pub fn load_shaders(
-    vertex_src: &str,
-    vertex_name: &str,
-    fragment_src: &str,
-    fragment_name: &str,
-) -> rendy::shader::ShaderSetBuilder {
-    use rendy::shader::SourceCodeShaderInfo;
+pub fn load_shaders(vertex_src: &[u8], fragment_src: &[u8]) -> rendy::shader::ShaderSetBuilder {
     use rendy::shader::SpirvShader;
-    let vertex = SpirvShader::new(
+    let vert_cursor = io::Cursor::new(vertex_src);
+    let vert_words = hal::pso::read_spirv(vert_cursor)
+        .expect("Invalid SPIR-V buffer passed to load_shaders one way or another!");
+    let vertex = SpirvShader::new(vert_words, hal::pso::ShaderStageFlags::VERTEX, "main");
 
-        );
-    let vertex = SourceCodeShaderInfo::new(
-        vertex_src,
-        vertex_name,
-        ShaderKind::Vertex,
-        SourceLanguage::GLSL,
-        "main",
-    );
-    let fragment = SourceCodeShaderInfo::new(
-        fragment_src,
-        fragment_name,
-        ShaderKind::Fragment,
-        SourceLanguage::GLSL,
-        "main",
-    );
+    let frag_cursor = io::Cursor::new(fragment_src);
+    let frag_words = hal::pso::read_spirv(frag_cursor)
+        .expect("Invalid SPIR-V buffer passed to load_shaders one way or another!");
+    let fragment = SpirvShader::new(frag_words, hal::pso::ShaderStageFlags::FRAGMENT, "main");
 
     let shader_builder: rendy::shader::ShaderSetBuilder =
         rendy::shader::ShaderSetBuilder::default()
@@ -1005,14 +991,9 @@ pub fn load_shader_files(
     vertex_file: &str,
     fragment_file: &str,
 ) -> rendy::shader::ShaderSetBuilder {
-    let vertex_src = std::fs::read_to_string(vertex_file).unwrap();
-    let fragment_src = std::fs::read_to_string(fragment_file).unwrap();
-    load_shaders(
-        vertex_src.as_ref(),
-        vertex_file,
-        fragment_src.as_ref(),
-        fragment_file,
-    )
+    let vertex_src = std::fs::read(vertex_file).unwrap();
+    let fragment_src = std::fs::read(fragment_file).unwrap();
+    load_shaders(vertex_src.as_ref(), fragment_src.as_ref())
 }
 
 /*
