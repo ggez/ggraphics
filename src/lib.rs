@@ -973,6 +973,10 @@ pub fn load_shaders(
     fragment_name: &str,
 ) -> rendy::shader::ShaderSetBuilder {
     use rendy::shader::SourceCodeShaderInfo;
+    use rendy::shader::SpirvShader;
+    let vertex = SpirvShader::new(
+
+        );
     let vertex = SourceCodeShaderInfo::new(
         vertex_src,
         vertex_name,
@@ -1194,8 +1198,8 @@ where
         let object_mesh = Arc::new(make_quad_mesh(device));
         let draws = vec![DrawCall::new(texture1, object_mesh.clone())];
 
-        let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslv");
-        let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.glslf");
+        let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.vert.spv");
+        let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.frag.spv");
 
         let align = device
             .factory
