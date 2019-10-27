@@ -1187,7 +1187,7 @@ pub struct DrawParam {
     */
 }
 
-pub fn draw(ctx: &mut (), param: DrawParam) -> Result<(), ()> {
+pub fn draw(ctx: &mut (), target: (), drawable: (), param: DrawParam) -> Result<(), ()> {
     Ok(())
 }
 
@@ -1208,8 +1208,8 @@ where
         let object_mesh = Arc::new(make_quad_mesh(device));
         let draws = vec![DrawCall::new(texture1, object_mesh.clone())];
 
-        let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.vert.spv");
-        let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/shader.frag.spv");
+        let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.vert.spv");
+        let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.frag.spv");
 
         let align = device
             .factory

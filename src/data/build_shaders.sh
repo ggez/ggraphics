@@ -1,3 +1,3 @@
 #!/bin/bash
-glslangValidator -V shader.vert.glsl -o shader.vert.spv
-glslangValidator -V shader.frag.glsl -o shader.frag.spv
+glslangValidator -V quad.vert.glsl -o quad.vert.spv
+glslangValidator -V quad.frag.glsl -o quad.frag.spv

@@ -16,6 +16,15 @@ layout(push_constant) uniform PushConstantTest {
     mat4 view;
 };
 
+vec2 vertices[6] = {
+    vec2(0.0, 0.0),
+    vec2(0.0, 1.0),
+    vec2(1.0, 1.0),
+    vec2(0.0, 0.0),
+    vec2(1.0, 1.0),
+    vec2(1.0, 0.0),
+};
+
 
 layout(location = 0) out vec4 frag_pos;
 layout(location = 1) out vec4 frag_color;
@@ -25,6 +34,7 @@ void main() {
     mat4 model_mat = mat4(model[0], model[1], model[2], model[3]);
 
     frag_color = color;
+    vec2 vertex = vertices[gl_VertexIndex];
     frag_pos = model_mat * vec4(pos, 1.0);
     // TODO: Have unit quad's and scale verts properly by some multiplier,
     // instead of having to divide by the size of the quad
