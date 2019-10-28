@@ -59,11 +59,6 @@ pub type Rect = euclid::Rect<f32, euclid::UnknownUnit>;
 //
 // Rendy doesn't currently work on gfx-rs's DX12 backend though, and the OpenGL backend
 // is still WIP, so...  I guess this is what we get.
-#[cfg(target_os = "macos")]
-pub type Backend = rendy::metal::Backend;
-
-#[cfg(not(target_os = "macos"))]
-pub type Backend = rendy::vulkan::Backend;
 
 /// Data we need per instance.  DrawParam gets turned into this.
 /// We have to be *quite particular* about layout since this gets
@@ -332,7 +327,7 @@ where
     B: hal::Backend,
 {
     /// The buffer where we store instance data.
-    buffer: InstanceBuffer<B>, //Escape<Buffer<B>>,
+    buffer: InstanceBuffer<B>,
     /// One descriptor set per draw call we do.
     /// Also has the number of instances in that draw call,
     /// so we can find offsets.
@@ -625,7 +620,6 @@ pub struct MeshRenderGroupDesc {
 impl MeshRenderGroupDesc {
     pub fn new() -> Self {
         Self {
-            // inner: MeshRenderPipelineDesc,
             colors: vec![hal::pso::ColorBlendDesc {
                 mask: hal::pso::ColorMask::ALL,
                 blend: Some(hal::pso::BlendState::ALPHA),
@@ -689,7 +683,6 @@ where
             0..(mem::size_of::<UniformData>() as u32),
         )];
 
-        // vertices: std::vec::Vec<(std::vec::Vec<gfx_hal::pso::input_assembler::Element<gfx_hal::format::Format>>, u32, gfx_hal::pso::input_assembler::VertexInputRate)>
         let vertices = vec![
             PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
             InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
@@ -713,8 +706,8 @@ where
         let mut vertex_buffers = Vec::new();
         let mut attributes = Vec::new();
 
-        for &(ref elemets, stride, rate) in &vertices {
-            push_vertex_desc(elemets, stride, rate, &mut vertex_buffers, &mut attributes);
+        for &(ref elements, stride, rate) in &vertices {
+            push_vertex_desc(elements, stride, rate, &mut vertex_buffers, &mut attributes);
         }
 
         let rect = hal::pso::Rect {
@@ -898,7 +891,7 @@ where
     Arc::new(texture)
 }
 
-pub fn make_quad_mesh<B>(device: &mut GraphicsDevice<B>) -> Mesh<B>
+fn make_quad_mesh<B>(device: &mut GraphicsDevice<B>) -> Mesh<B>
 where
     B: hal::Backend,
 {
@@ -925,7 +918,7 @@ where
         })
         .collect();
 
-    let m = Mesh::<Backend>::builder()
+    let m = Mesh::<B>::builder()
         .with_indices(indices)
         .with_vertices(&vertices[..])
         .build(device.queue_id, &device.factory)
@@ -933,7 +926,8 @@ where
     m
 }
 
-pub fn make_tri_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
+/*
+fn make_tri_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
 where
     B: hal::Backend,
 {
@@ -962,6 +956,7 @@ where
         .unwrap();
     m
 }
+*/
 
 /// Creates a shader builder from the given GLSL shader source texts.
 ///
@@ -1117,16 +1112,16 @@ where
 
     pub fn new() -> Self {
         use rendy::factory::Config;
-        use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
-        use rendy::hal::PhysicalDevice as _;
+        //use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
+        //use rendy::hal::PhysicalDevice as _;
         let config: Config = Default::default();
 
-        let (mut factory, mut families): (Factory<B>, _) = rendy::factory::init(config).unwrap();
+        let (factory, families): (Factory<B>, _) = rendy::factory::init(config).unwrap();
 
-        let width = 800u32;
-        let height = 600u32;
+        //let width = 800u32;
+        //let height = 600u32;
 
-        let window_kind = hal::image::Kind::D2(width, height, 1, 1);
+        //let window_kind = hal::image::Kind::D2(width, height, 1, 1);
 
         // HACK suggested by Frizi, just use queue 0 for everything
         // instead of getting it from `graph.node_queue(pass)`.
@@ -1187,7 +1182,8 @@ pub struct DrawParam {
     */
 }
 
-pub fn draw(ctx: &mut (), target: (), drawable: (), param: DrawParam) -> Result<(), ()> {
+
+pub fn draw(_ctx: &mut (), _target: (), _drawable: (), _param: DrawParam) -> Result<(), ()> {
     Ok(())
 }
 
@@ -1354,7 +1350,8 @@ where
     pub fn dispose(mut self) {
         // TODO: This doesn't actually dispose of everything right.
         // Why not?
-        self.graph.dispose(&mut self.device.factory, &self.aux)
+        self.graph.dispose(&mut self.device.factory, &self.aux);
+        //self.device.factory.dispose(self.aux.
     }
 }
 
@@ -1376,6 +1373,3 @@ pub fn new_dx_device() -> GraphicsDevice<rendy::dx12::Backend> {
     GraphicsDevice::new()
 }
 
-// pub fn new_empty() -> GraphicsDevice<rendy::empty::Backend> {
-//     GraphicsDevice::new()
-// }
