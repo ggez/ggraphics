@@ -34,7 +34,7 @@ void main() {
     mat4 model_mat = mat4(model[0], model[1], model[2], model[3]);
 
     frag_color = color;
-    vec2 vertex = vertices[gl_VertexIndex];
+    vec2 vertex = vertices[gl_VertexIndex % 6];
     frag_pos = model_mat * vec4(pos, 1.0);
     // TODO: Have unit quad's and scale verts properly by some multiplier,
     // instead of having to divide by the size of the quad

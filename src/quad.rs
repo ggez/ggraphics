@@ -6,32 +6,6 @@ THEN I have one or more frames in flight, and each frame in flight has its own c
 To actually draw, you grab the appropriate free frame-in-flight, copy your (texture, rect list) pairs into its buffers, and for each pair issue one draw call to draw that chunk of the buffer.
 */
 
-/*
-Okay, so the first step is going to be rendering multiple things with the same
-geometry and texture using instanced drawing.  DONE.
-
-Next step is to render things with different textures.  DONE.
-
-Last step is to render things with different textures and
-different geometry.  Trivial to do currently but it would be nice
-to not re-bind the mesh descriptor if we don't have to...
-How much does that actually matter though?  Dunno.
-DONE.
-
-Time to clean up and refactor!
-
-Last+1 step is going to be having multiple pipelines with
-different shaders.
-
-Last+2 step might be to make rendering quads a more efficient special case,
-for example by reifying the geometry in the vertex shader a la the Rendy
-quads example.  This might also be where we try to reduce
-descriptor swaps if possible.
-
-Then actual last step will be to have multiple render passes with different
-render targets.
-*/
-
 use std::io;
 use std::mem;
 use std::sync::Arc;
@@ -42,7 +16,7 @@ use rendy::graph::{render::*, GraphContext, NodeBuffer, NodeImage};
 use rendy::hal;
 use rendy::hal::Device as _;
 use rendy::memory::Dynamic;
-use rendy::mesh::{AsVertex, Mesh, PosColorNorm};
+use rendy::mesh::AsVertex;
 use rendy::resource::{
     Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
     WrapMode,
@@ -57,30 +31,15 @@ pub type Point2 = euclid::Point2D<f32, euclid::UnknownUnit>;
 pub type Transform3 = euclid::Transform3D<f32, euclid::UnknownUnit, euclid::UnknownUnit>;
 pub type Rect = euclid::Rect<f32, euclid::UnknownUnit>;
 
-pub mod quad;
-
-// TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
-// Perhaps.
-// For now though, this is okay if not great.
-// It WOULD be quite nice to be able to play with OpenGL and DX12 backends.
-//
-// TODO: We ALSO need to specify features to rendy to build these, so this doesn't even work currently.
-// For now we only ever specify Vulkan.
-//
-// Rendy doesn't currently work on gfx-rs's DX12 backend though, and the OpenGL backend
-// is still WIP, so...  I guess this is what we get.
-
-/// Data we need per instance.  DrawParam gets turned into this.
+/// Data we need for each quad instance.
+/// DrawParam gets turned into this, eventually.
 /// We have to be *quite particular* about layout since this gets
 /// fed straight to the shader.
 ///
 /// TODO: Currently the shader doesn't use src or color though.
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-pub struct InstanceData {
-    // The euclid types don't impl PartialOrd and PartialEq so
-    // we have to use the lower-level forms for
-    // actually sending to the GPU.  :-/
+pub struct QuadData {
     transform: [f32; 16],
     src: [f32; 4],
     color: [f32; 4],
@@ -95,7 +54,7 @@ use rendy::mesh::{Attribute, VertexFormat};
 ///
 /// This trait impl is basically extended from the impl for
 /// `rendy::mesh::Transform`
-impl AsVertex for InstanceData {
+impl AsVertex for QuadData {
     fn vertex() -> VertexFormat {
         VertexFormat {
             attributes: vec![
@@ -165,12 +124,12 @@ pub struct UniformData {
 
 /// An instance buffer that bounds checks how many instances you can
 /// put into it.  Is not generic on the instance data type, just holds
-/// `InstanceData`.
+/// `QuadData`.
 /// TODO: Make it resizeable someday.
 ///
 /// The buffer in a `FrameInFlight`.
 ///
-/// We pack data from multiple `DrawCall`'s together into one `Buffer`
+/// We pack data from multiple `QuadDrawCall`'s together into one `Buffer`
 /// but each draw call can have a varying amount of instance data,
 /// so we end up with something like:
 ///
@@ -247,7 +206,7 @@ where
     /// This can't be a const fn yet, 'cause trait bounds.
     /// See https://github.com/rust-lang/rust/issues/57563
     pub fn instance_size() -> u64 {
-        mem::size_of::<InstanceData>() as u64
+        mem::size_of::<QuadData>() as u64
     }
 
     /// Returns the buffer size in bytes, rounded up
@@ -279,11 +238,7 @@ where
     /// is not large enough returns Err.
     ///
     /// TODO: Better error types.  Do bounds checks with assert_dbg!()?
-    pub fn add_slice(
-        &mut self,
-        factory: &Factory<B>,
-        instances: &[InstanceData],
-    ) -> Result<u64, ()> {
+    pub fn add_slice(&mut self, factory: &Factory<B>, instances: &[QuadData]) -> Result<u64, ()> {
         if self.length + (instances.len() as u64) >= self.capacity {
             return Err(());
         }
@@ -324,7 +279,7 @@ where
 /// When we do want to do that though, I think the simple
 /// way would be... maybe create a structure through which
 /// a FrameInFlight can be altered and which records if
-/// things have actually changed.  Actually, the DrawCall
+/// things have actually changed.  Actually, the QuadDrawCall
 /// might the place to handle that?  Hm, having a separate
 /// Buffer per draw call might be the way to go too?  If
 /// the buffer does not change from one draw call to the
@@ -387,7 +342,7 @@ where
     fn new(
         factory: &mut Factory<B>,
         align: u64,
-        draw_calls: &[DrawCall<B>],
+        draw_calls: &[QuadDrawCall<B>],
         descriptor_set: &Handle<DescriptorSetLayout<B>>,
     ) -> Self {
         use std::convert::TryInto;
@@ -414,7 +369,7 @@ where
     fn create_descriptor_sets(
         &mut self,
         factory: &Factory<B>,
-        draw_call: &DrawCall<B>,
+        draw_call: &QuadDrawCall<B>,
         layout: &Handle<DescriptorSetLayout<B>>,
         _align: u64,
     ) {
@@ -452,7 +407,7 @@ where
         &mut self,
         factory: &Factory<B>,
         uniforms: &UniformData,
-        draw_calls: &[DrawCall<B>],
+        draw_calls: &[QuadDrawCall<B>],
         _layout: &Handle<DescriptorSetLayout<B>>,
         _align: u64,
     ) {
@@ -477,10 +432,10 @@ where
         }
     }
 
-    /// Draws a list of DrawCall's.
+    /// Draws a list of QuadDrawCall's.
     fn draw(
         &mut self,
-        draw_calls: &[DrawCall<B>],
+        draw_calls: &[QuadDrawCall<B>],
         layout: &B::PipelineLayout,
         encoder: &mut RenderPassEncoder<'_, B>,
         _align: u64,
@@ -501,11 +456,6 @@ where
                     std::iter::empty(),
                 );
             }
-            draw_call
-                .mesh
-                .as_ref()
-                .bind(0, &[PosColorNorm::vertex()], encoder)
-                .expect("Could not bind mesh?");
             // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
             // to differentiate which *place* we're binding to; see the 0 in the
             // bind_graphics_descriptor_sets().
@@ -526,16 +476,13 @@ where
                     &self.push_constants,
                 );
             }
-            // The length of the mesh is the number of indices if it has any, the number
-            // of verts otherwise.  See https://github.com/amethyst/rendy/issues/119
-            let indices = 0..(draw_call.mesh.len() as u32);
             // This count is the *number of instances*.  What instance
             // to start at in the buffer is defined by the offset in
             // `bind_vertex_buffers()` above, and the stride/size of an instance
             // is defined in `AsVertex`.
             let instances = 0..(draw_call.objects.len() as u32);
             unsafe {
-                encoder.draw_indexed(indices, 0, instances);
+                encoder.draw(0..6, instances);
             }
             instance_count += draw_call.objects.len() as u64;
         }
@@ -551,27 +498,25 @@ where
 /// that in the future and make the various things
 /// in here `Option`s.
 #[derive(Debug)]
-pub struct DrawCall<B>
+pub struct QuadDrawCall<B>
 where
     B: hal::Backend,
 {
-    objects: Vec<InstanceData>,
-    mesh: Arc<Mesh<B>>,
+    objects: Vec<QuadData>,
     texture: Arc<Texture<B>>,
     /// We just need the actual config for the sampler 'cause
     /// Rendy's `Factory` can manage a sampler cache itself.
     sampler_info: SamplerInfo,
 }
 
-impl<B> DrawCall<B>
+impl<B> QuadDrawCall<B>
 where
     B: hal::Backend,
 {
-    pub fn new(texture: Arc<Texture<B>>, mesh: Arc<Mesh<B>>) -> Self {
+    pub fn new(texture: Arc<Texture<B>>) -> Self {
         let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
         Self {
             objects: vec![],
-            mesh,
             texture,
             sampler_info,
         }
@@ -585,7 +530,7 @@ where
             let transform = Transform3::create_translation(x, y, -100.0);
             let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
             let color = [1.0, 0.0, 1.0, 1.0];
-            let instance = InstanceData {
+            let instance = QuadData {
                 transform: transform.to_row_major_array(),
                 src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
                 color,
@@ -600,7 +545,7 @@ pub struct Aux<B: hal::Backend> {
     pub frames: usize,
     pub align: u64,
 
-    pub draws: Vec<DrawCall<B>>,
+    pub draws: Vec<QuadDrawCall<B>>,
     pub camera: UniformData,
 
     pub shader: rendy::shader::ShaderSetBuilder,
@@ -610,7 +555,7 @@ const MAX_OBJECTS: usize = 10_000;
 
 /// Render group that consist of simple graphics pipeline.
 #[derive(Debug)]
-pub struct MeshRenderGroup<B>
+pub struct QuadRenderGroup<B>
 where
     B: hal::Backend,
 {
@@ -622,12 +567,11 @@ where
 
 /// Descriptor for simple render group.
 #[derive(Debug)]
-pub struct MeshRenderGroupDesc {
-    // inner: MeshRenderPipelineDesc,
+pub struct QuadRenderGroupDesc {
     colors: Vec<hal::pso::ColorBlendDesc>,
 }
 
-impl MeshRenderGroupDesc {
+impl QuadRenderGroupDesc {
     pub fn new() -> Self {
         Self {
             colors: vec![hal::pso::ColorBlendDesc {
@@ -638,7 +582,7 @@ impl MeshRenderGroupDesc {
     }
 }
 
-impl<B> RenderGroupDesc<B, Aux<B>> for MeshRenderGroupDesc
+impl<B> RenderGroupDesc<B, Aux<B>> for QuadRenderGroupDesc
 where
     B: hal::Backend,
 {
@@ -693,10 +637,8 @@ where
             0..(mem::size_of::<UniformData>() as u32),
         )];
 
-        let vertices = vec![
-            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
-            InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
-        ];
+        let vertices =
+            vec![QuadData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1))];
 
         let set_layouts = layout_sets
             .into_iter()
@@ -788,7 +730,7 @@ where
 
         shader_set.dispose(factory);
 
-        Ok(Box::new(MeshRenderGroup::<B> {
+        Ok(Box::new(QuadRenderGroup::<B> {
             set_layouts,
             pipeline_layout,
             graphics_pipeline,
@@ -797,7 +739,7 @@ where
     }
 }
 
-impl<B> RenderGroup<B, Aux<B>> for MeshRenderGroup<B>
+impl<B> RenderGroup<B, Aux<B>> for QuadRenderGroup<B>
 where
     B: hal::Backend,
 {
@@ -901,73 +843,6 @@ where
     Arc::new(texture)
 }
 
-fn make_quad_mesh<B>(device: &mut GraphicsDevice<B>) -> Mesh<B>
-where
-    B: hal::Backend,
-{
-    let verts: Vec<[f32; 3]> = vec![
-        [0.0, 0.0, 0.0],
-        [0.0, 100.0, 0.0],
-        [100.0, 100.0, 0.0],
-        [100.0, 0.0, 0.0],
-    ];
-    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 0, 2, 3]);
-    // TODO: Mesh color... how do we want to handle this?
-    // It's a bit of an open question in ggez as well, so.
-    // For now the shader just uses the vertex color.
-    // It feels weird but ggez more or less requires both vertex
-    // colors and per-model colors.
-    // Unless you want to handle changing sprite colors by
-    // creating entirely new geometry for the sprite.
-    let vertices: Vec<_> = verts
-        .into_iter()
-        .map(|v| PosColorNorm {
-            position: rendy::mesh::Position::from(v),
-            color: [1.0, 1.0, 1.0, 1.0].into(),
-            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
-        })
-        .collect();
-
-    let m = Mesh::<B>::builder()
-        .with_indices(indices)
-        .with_vertices(&vertices[..])
-        .build(device.queue_id, &device.factory)
-        .unwrap();
-    m
-}
-
-/*
-fn make_tri_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
-where
-    B: hal::Backend,
-{
-    let verts: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [50.0, 100.0, 0.0]];
-    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2]);
-    // TODO: Mesh color... how do we want to handle this?
-    // It's a bit of an open question in ggez as well, so.
-    // For now the shader just uses the vertex color.
-    // It feels weird but ggez more or less requires both vertex
-    // colors and per-model colors.
-    // Unless you want to handle changing sprite colors by
-    // creating entirely new geometry for the sprite.
-    let vertices: Vec<_> = verts
-        .into_iter()
-        .map(|v| PosColorNorm {
-            position: rendy::mesh::Position::from(v),
-            color: [1.0, 1.0, 1.0, 1.0].into(),
-            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
-        })
-        .collect();
-
-    let m = Mesh::<Backend>::builder()
-        .with_indices(indices)
-        .with_vertices(&vertices[..])
-        .build(queue_id, &factory)
-        .unwrap();
-    m
-}
-*/
-
 /// Creates a shader builder from the given GLSL shader source texts.
 ///
 /// Also takes names for the vertex and fragment shaders to be used
@@ -1026,27 +901,6 @@ loop {
 }
 
 
-pub struct DrawCall {
-    // Mesh, texture, sampler info instance data.
-}
-
-/// Roughly corresponds to a RenderGroup
-pub struct Pipeline {
-    // Draws
-// Uniforms
-// Shaders
-}
-
-pub struct GraphicsDevice {
-    // frames in flight...
-// descriptor sets...
-}
-
-impl GraphicsDevice {
-    pub fn add_draw(&mut self, mesh: (), texture: (), sampler_info: (), instances: &[InstanceData]) {}
-}
-
-pub fn present() {}
 */
 
 /// An initialized graphics device context,
@@ -1096,7 +950,7 @@ where
         //         hal::command::ClearDepthStencil(1.0, 0),
         //     )),
         // );
-        let render_group_desc = MeshRenderGroupDesc::new();
+        let render_group_desc = QuadRenderGroupDesc::new();
         let pass = graph_builder.add_node(
             render_group_desc
                 .builder()
@@ -1168,34 +1022,6 @@ where
     pub aux: Aux<B>,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct DrawParam {
-    pub dest: Point2,
-    /*
-    /// A portion of the drawable to clip, as a fraction of the whole image.
-    /// Defaults to the whole image `(0,0 to 1,1)` if omitted.
-    pub src: Rect,
-    /// The position to draw the graphic expressed as a `Point2`.
-    pub dest: mint::Point2<f32>,
-    /// The orientation of the graphic in radians.
-    pub rotation: f32,
-    /// The x/y scale factors expressed as a `Vector2`.
-    pub scale: mint::Vector2<f32>,
-    /// An offset from the center for transform operations like scale/rotation,
-    /// with `0,0` meaning the origin and `1,1` meaning the opposite corner from the origin.
-    /// By default these operations are done from the top-left corner, so to rotate something
-    /// from the center specify `Point2::new(0.5, 0.5)` here.
-    pub offset: mint::Point2<f32>,
-    /// A color to draw the target with.
-    /// Default: white.
-    pub color: Color,
-    */
-}
-
-pub fn draw(_ctx: &mut (), _target: (), _drawable: (), _param: DrawParam) -> Result<(), ()> {
-    Ok(())
-}
-
 impl<B> GraphicsWindowThing<B>
 where
     B: hal::Backend,
@@ -1210,8 +1036,7 @@ where
         let heart_bytes =
             include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
         let texture1 = make_texture(device, heart_bytes);
-        let object_mesh = Arc::new(make_quad_mesh(device));
-        let draws = vec![DrawCall::new(texture1, object_mesh.clone())];
+        let draws = vec![QuadDrawCall::new(texture1)];
 
         let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.vert.spv");
         let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.frag.spv");
@@ -1278,7 +1103,7 @@ where
                 hal::command::ClearDepthStencil(1.0, 0),
             )),
         );
-        let render_group_desc = MeshRenderGroupDesc::new();
+        let render_group_desc = QuadRenderGroupDesc::new();
         let pass = graph_builder.add_node(
             render_group_desc
                 .builder()
@@ -1364,20 +1189,30 @@ where
     }
 }
 
-/// This is sorta squirrelly, it can't easily be a method
-/// without us having to specify the backend type anyway,
-/// soooooo.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn new_vulkan_device() -> GraphicsDevice<rendy::vulkan::Backend> {
-    GraphicsDevice::new()
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct DrawParam {
+    pub dest: Point2,
+    /*
+    /// A portion of the drawable to clip, as a fraction of the whole image.
+    /// Defaults to the whole image `(0,0 to 1,1)` if omitted.
+    pub src: Rect,
+    /// The position to draw the graphic expressed as a `Point2`.
+    pub dest: mint::Point2<f32>,
+    /// The orientation of the graphic in radians.
+    pub rotation: f32,
+    /// The x/y scale factors expressed as a `Vector2`.
+    pub scale: mint::Vector2<f32>,
+    /// An offset from the center for transform operations like scale/rotation,
+    /// with `0,0` meaning the origin and `1,1` meaning the opposite corner from the origin.
+    /// By default these operations are done from the top-left corner, so to rotate something
+    /// from the center specify `Point2::new(0.5, 0.5)` here.
+    pub offset: mint::Point2<f32>,
+    /// A color to draw the target with.
+    /// Default: white.
+    pub color: Color,
+    */
 }
 
-#[cfg(target_os = "macos")]
-pub fn new_metal_device() -> GraphicsDevice<rendy::metal::Backend> {
-    GraphicsDevice::new()
-}
-
-#[cfg(target_os = "windows")]
-pub fn new_dx_device() -> GraphicsDevice<rendy::dx12::Backend> {
-    GraphicsDevice::new()
+pub fn draw(_ctx: &mut (), _target: (), _drawable: (), _param: DrawParam) -> Result<(), ()> {
+    Ok(())
 }

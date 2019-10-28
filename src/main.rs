@@ -6,7 +6,7 @@
 
 // use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
-use ggraphics::*;
+use ggraphics::quad::*;
 
 fn main() {
     let mut x: GraphicsWindowThing<rendy::vulkan::Backend> = GraphicsWindowThing::new();
