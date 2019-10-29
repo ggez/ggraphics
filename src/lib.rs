@@ -1213,8 +1213,8 @@ where
         let object_mesh = Arc::new(make_quad_mesh(device));
         let draws = vec![DrawCall::new(texture1, object_mesh.clone())];
 
-        let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.vert.spv");
-        let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.frag.spv");
+        let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/mesh.vert.spv");
+        let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/mesh.frag.spv");
 
         let align = device
             .factory
