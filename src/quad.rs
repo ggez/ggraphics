@@ -454,6 +454,13 @@ where
             // This is a bit weird, but basically tells the thing where to find the
             // instance data.  The stride and such of the instance structure is
             // defined in the `AsVertex` definition.
+            //
+            // TODO: Per Ralith, "don't rebind the descriptor set for every batch, it sticks
+            // around".  So we might be able to do it in prepare() instead?  Not sure.  The
+            // Rendy examples do it here.
+            //
+            // Also descriptor set binding numbers and vertex buffer binding numbers
+            // are separate.
             unsafe {
                 encoder.bind_graphics_descriptor_sets(
                     layout,
@@ -462,19 +469,16 @@ where
                     std::iter::empty(),
                 );
             }
-            /*
-            draw_call
-                .mesh
-                .as_ref()
-                .bind(0, &[PosColorNorm::vertex()], encoder)
-                .expect("Could not bind mesh?");
-                */
-            // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
-            // to differentiate which *place* we're binding to; see the 0 in the
-            // bind_graphics_descriptor_sets().
+
+            // The 0 here is to say which vertex buffer slot we're binding to, more or less...
+            // if we were drawing a Mesh as well we would, say, bind that to 0 and
+            // bind the instance buffer to 1.
+            //
+            // But, we are doing mesh-less drawing 'cause it's just quads, and
+            // just creating the mesh-equivalent in the shader,
             unsafe {
                 encoder.bind_vertex_buffers(
-                    1,
+                    0,
                     std::iter::once((
                         self.buffer.inner().raw(),
                         self.buffer.instance_offset(instance_count).unwrap(),

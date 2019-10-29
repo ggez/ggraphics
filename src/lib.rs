@@ -506,9 +506,8 @@ where
                 .as_ref()
                 .bind(0, &[PosColorNorm::vertex()], encoder)
                 .expect("Could not bind mesh?");
-            // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
-            // to differentiate which *place* we're binding to; see the 0 in the
-            // bind_graphics_descriptor_sets().
+            // The 1 here is because this is the second vertex buffer we've bound;
+            // the first is bound to the Mesh.
             unsafe {
                 encoder.bind_vertex_buffers(
                     1,
