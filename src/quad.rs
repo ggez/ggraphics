@@ -302,8 +302,8 @@ where
 {
     /// The buffer where we store instance data.
     buffer: InstanceBuffer<B>,
-    /// One descriptor set per draw call we do.
-    descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
+    // /// One descriptor set per draw call we do.
+    //descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
     /// The frame's local copy of uniform data.
     push_constants: [u32; 32],
 }
@@ -346,29 +346,28 @@ where
         }
     }
 
-    fn new(
-        factory: &mut Factory<B>,
-        align: u64,
-        draw_calls: &[QuadDrawCall<B>],
-        descriptor_set: &Handle<DescriptorSetLayout<B>>,
-    ) -> Self {
+    fn new(factory: &mut Factory<B>) -> Self {
         use std::convert::TryInto;
-        let buffer_count = MAX_OBJECTS * draw_calls.len();
+        // TODO: Figure out max length.
+        let buffer_count = MAX_OBJECTS; // * draw_calls.len();
         let buffer = InstanceBuffer::new(buffer_count.try_into().unwrap(), factory);
-        let descriptor_sets = vec![];
-        let mut ret = Self {
+        //let descriptor_sets = vec![];
+        let ret = Self {
             buffer,
-            descriptor_sets,
+            //descriptor_sets,
             push_constants: [0; 32],
         };
+        /*
         for draw_call in draw_calls {
             // all descriptor sets use the same layout
             // we need one per draw call, per frame in flight.
             ret.create_descriptor_sets(factory, draw_call, descriptor_set, align);
         }
+        */
         ret
     }
 
+    /*
     /// Takes a draw call and creates a descriptor set that points
     /// at its resources.
     ///
@@ -413,6 +412,7 @@ where
             self.descriptor_sets.push(set);
         }
     }
+    */
 
     /// This happens before a frame; it should take a LIST of draw calls and take
     /// care of uploading EACH of them into the buffer so they don't clash!
@@ -455,7 +455,7 @@ where
     ) {
         //println!("Drawing {} draw calls", draw_calls.len());
         let mut instance_count: u64 = 0;
-        for (draw_call, descriptor_set) in draw_calls.iter().zip(&self.descriptor_sets) {
+        for draw_call in draw_calls {
             //println!("Drawing {:#?}, {:#?}, {}", draw_call, descriptor_set, draw_offset);
 
             // This is a bit weird, but basically tells the thing where to find the
@@ -472,7 +472,7 @@ where
                 encoder.bind_graphics_descriptor_sets(
                     layout,
                     0,
-                    std::iter::once(descriptor_set.raw()),
+                    std::iter::once(draw_call.descriptor_set.raw()),
                     std::iter::empty(),
                 );
             }
@@ -532,6 +532,7 @@ where
 {
     objects: Vec<QuadData>,
     texture: Arc<Texture<B>>,
+    descriptor_set: Escape<DescriptorSet<B>>,
     /// We just need the actual config for the sampler 'cause
     /// Rendy's `Factory` can manage a sampler cache itself.
     sampler_info: SamplerInfo,
@@ -541,12 +542,19 @@ impl<B> QuadDrawCall<B>
 where
     B: hal::Backend,
 {
-    pub fn new(texture: Arc<Texture<B>>) -> Self {
+    pub fn new(
+        texture: Arc<Texture<B>>,
+        factory: &Factory<B>,
+        layout: &Handle<DescriptorSetLayout<B>>,
+    ) -> Self {
         let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
+        let descriptor_set =
+            QuadDrawCall::create_descriptor_set(&*texture, &sampler_info, factory, layout);
         Self {
             objects: vec![],
             texture,
             sampler_info,
+            descriptor_set,
         }
     }
 
@@ -566,6 +574,40 @@ where
             self.objects.push(instance);
         }
     }
+
+    fn create_descriptor_set(
+        texture: &Texture<B>,
+        sampler_info: &SamplerInfo,
+        factory: &Factory<B>,
+        layout: &Handle<DescriptorSetLayout<B>>,
+    ) -> Escape<DescriptorSet<B>> {
+        // Does this sampler need to stay alive?  We pass a
+        // reference to it elsewhere in an `unsafe` block...
+        // It's cached in the Factory anyway, so I don't think so.
+        let sampler = factory
+            .get_sampler(sampler_info.clone())
+            .expect("Could not get sampler");
+
+        unsafe {
+            let set = factory.create_descriptor_set(layout.clone()).unwrap();
+            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
+                set: set.raw(),
+                binding: 1,
+                array_offset: 0,
+                descriptors: vec![hal::pso::Descriptor::Image(
+                    texture.view().raw(),
+                    hal::image::Layout::ShaderReadOnlyOptimal,
+                )],
+            }));
+            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
+                set: set.raw(),
+                binding: 2,
+                array_offset: 0,
+                descriptors: vec![hal::pso::Descriptor::Sampler(sampler.raw())],
+            }));
+            set
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -577,6 +619,7 @@ pub struct Aux<B: hal::Backend> {
     pub camera: UniformData,
 
     pub shader: rendy::shader::ShaderSetBuilder,
+    pub layout: Handle<DescriptorSetLayout<B>>,
 }
 
 const MAX_OBJECTS: usize = 10_000;
@@ -587,7 +630,6 @@ pub struct QuadRenderGroup<B>
 where
     B: hal::Backend,
 {
-    set_layouts: Vec<Handle<DescriptorSetLayout<B>>>,
     pipeline_layout: B::PipelineLayout,
     graphics_pipeline: B::GraphicsPipeline,
     frames_in_flight: Vec<FrameInFlight<B>>,
@@ -655,7 +697,6 @@ where
             primitive_restart: hal::pso::PrimitiveRestart::Disabled,
         };
 
-        let layout_sets = vec![FrameInFlight::<B>::get_descriptor_set_layout()];
         let layout_push_constants = vec![(
             hal::pso::ShaderStageFlags::ALL,
             // Pretty sure the size of push constants is given in bytes,
@@ -668,19 +709,15 @@ where
         let vertices =
             vec![QuadData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1))];
 
-        let set_layouts = layout_sets
-            .into_iter()
-            .map(|set| {
-                factory
-                    .create_descriptor_set_layout(set.bindings)
-                    .map(Handle::from)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        // TODO: Verify this doesn't cause a double-free when combined with aux.layout
+        // getting destroyed.
+        let desc_set_layout_list = vec![aux.layout.raw()];
 
         let pipeline_layout = unsafe {
             factory
                 .device()
-                .create_pipeline_layout(set_layouts.iter().map(|l| l.raw()), layout_push_constants)
+                .create_pipeline_layout(desc_set_layout_list, layout_push_constants)
+            //.create_pipeline_layout(vec![set_layouts.iter().map(|l| l.raw()), layout_push_constants)
         }?;
 
         let mut vertex_buffers = Vec::new();
@@ -748,18 +785,13 @@ where
             e
         })?;
 
-        let (frames, align) = (aux.frames, aux.align);
-
-        // Each `FrameInFlight` needs one descriptor set per draw call.
+        // Create frames-in-flight
         let mut frames_in_flight = vec![];
-        frames_in_flight.extend(
-            (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
-        );
+        frames_in_flight.extend((0..aux.frames).map(|_| FrameInFlight::new(factory)));
 
         shader_set.dispose(factory);
 
         Ok(Box::new(QuadRenderGroup::<B> {
-            set_layouts,
             pipeline_layout,
             graphics_pipeline,
             frames_in_flight,
@@ -781,7 +813,7 @@ where
     ) -> PrepareResult {
         let align = aux.align;
 
-        let layout = &self.set_layouts[0];
+        let layout = &aux.layout;
         self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
         // TODO: Investigate this more...
         // Ooooooh in the example it always used the same draw command buffer 'cause it
@@ -820,7 +852,7 @@ where
             factory
                 .device()
                 .destroy_pipeline_layout(self.pipeline_layout);
-            drop(self.set_layouts);
+            //drop(self.set_layouts);
         }
     }
 }
@@ -1066,8 +1098,21 @@ where
         use hal::adapter::PhysicalDevice;
         let heart_bytes =
             include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
+
+        let layout_set: SetLayout = FrameInFlight::<B>::get_descriptor_set_layout();
+        let desc_set_layout = device
+            .factory
+            .create_descriptor_set_layout(layout_set.bindings)
+            .expect("Bogus layout?")
+            .into(); // Turn Escape into Handle
+
         let texture1 = make_texture(device, heart_bytes);
-        let draws = vec![QuadDrawCall::new(texture1)];
+        let draws = vec![QuadDrawCall::new(
+            texture1,
+            &device.factory,
+            &desc_set_layout,
+        )];
+        //let draws = vec![];
 
         let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.vert.spv");
         let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.frag.spv");
@@ -1080,6 +1125,7 @@ where
 
         let width = width;
         let height = height;
+
         let aux = Aux {
             frames: frames as _,
             align,
@@ -1092,6 +1138,7 @@ where
             },
 
             shader: load_shader_files(vertex_file, fragment_file),
+            layout: desc_set_layout,
         };
         aux
     }
