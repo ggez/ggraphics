@@ -262,6 +262,12 @@ where
     pub fn inner_mut(&mut self) -> &mut Buffer<B> {
         &mut self.buffer
     }
+
+    pub fn dispose(self, factory: &Factory<B>) {
+        unsafe {
+            factory.destroy_relevant_buffer(Escape::unescape(self.buffer));
+        }
+    }
 }
 
 /// What data we need for each frame in flight.
@@ -456,6 +462,13 @@ where
                     std::iter::empty(),
                 );
             }
+            /*
+            draw_call
+                .mesh
+                .as_ref()
+                .bind(0, &[PosColorNorm::vertex()], encoder)
+                .expect("Could not bind mesh?");
+                */
             // The 1 here is a LITTLE weird; TODO: Investigate!  I THINK it is there
             // to differentiate which *place* we're binding to; see the 0 in the
             // bind_graphics_descriptor_sets().
@@ -486,6 +499,10 @@ where
             }
             instance_count += draw_call.objects.len() as u64;
         }
+    }
+
+    pub fn dispose(self, factory: &Factory<B>) {
+        self.buffer.dispose(factory)
     }
 }
 
@@ -783,6 +800,9 @@ where
 
     fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
         unsafe {
+            for frame in self.frames_in_flight.into_iter() {
+                frame.dispose(factory);
+            }
             factory
                 .device()
                 .destroy_graphics_pipeline(self.graphics_pipeline);
