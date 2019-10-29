@@ -281,6 +281,9 @@ where
 /// and descriptor sets and such and only change bits
 /// that aren't in use from other frames, but that's
 /// more complex than I want to get into right now.
+/// So basically each `FrameInFlight` contains a whole
+/// copy of what writeable data we need to render a frame,
+/// and that data gets re-filled each frame.
 ///
 /// When we do want to do that though, I think the simple
 /// way would be... maybe create a structure through which
@@ -300,8 +303,6 @@ where
     /// The buffer where we store instance data.
     buffer: InstanceBuffer<B>,
     /// One descriptor set per draw call we do.
-    /// Also has the number of instances in that draw call,
-    /// so we can find offsets.
     descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
     /// The frame's local copy of uniform data.
     push_constants: [u32; 32],
@@ -372,6 +373,12 @@ where
     /// at its resources.
     ///
     /// For now we do not care about preserving descriptor sets between draw calls.
+    /// TODO: This "one per draw call" bit is weird, see if that can be improved...
+    /// Basically we need the texture and sampler info to shove into the descriptor sets,
+    /// and those are specific to each draw call.
+    /// The layout is defined by the `FrameInFlight` though.  See if that can be refactored
+    /// somehow.
+    /// Perhaps a DrawCall should manage its own descriptor sets?
     fn create_descriptor_sets(
         &mut self,
         factory: &Factory<B>,
@@ -1011,7 +1018,7 @@ where
 
         //let window_kind = hal::image::Kind::D2(width, height, 1, 1);
 
-        // HACK suggested by Frizi, just use queue 0 for everything
+        // TODO: HACK suggested by Frizi, just use queue 0 for everything
         // instead of getting it from `graph.node_queue(pass)`.
         // Since we control in our `Config` what families we have
         // and what they have, as long as we only ever use one family
