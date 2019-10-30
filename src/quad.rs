@@ -501,7 +501,7 @@ where
             let x = rng.rand_float() * max_width;
             let y = rng.rand_float() * max_height;
             let transform = Transform3::create_translation(x, y, -100.0);
-            let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
+            let src = Rect::from(euclid::Size2D::new(100.0, 100.0));
             let color = [1.0, 0.0, 1.0, 1.0];
             let instance = QuadData {
                 transform: transform.to_column_major_array(),
@@ -549,8 +549,11 @@ where
 
 #[derive(Debug)]
 pub struct Aux<B: hal::Backend> {
+    /// Number of FrameInFlight's.
+    /// This is a little bass-ackwards but there's currently no better place to put it;
+    /// we get this from the PresentNode but have to build that after building
+    /// the QuadRenderGroup, and the QuadRenderGroupDesc is where this is mainly used.
     pub frames: usize,
-    pub align: u64,
 
     pub draws: Vec<QuadDrawCall<B>>,
     pub camera: UniformData,
@@ -747,9 +750,6 @@ where
         _subpass: hal::pass::Subpass<'_, B>,
         aux: &Aux<B>,
     ) -> PrepareResult {
-        let align = aux.align;
-
-        let layout = &aux.layout;
         self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws);
         // TODO: Investigate this more...
         // Ooooooh in the example it always used the same draw command buffer 'cause it
@@ -969,7 +969,6 @@ where
         width: f32,
         height: f32,
     ) -> Aux<B> {
-        use hal::adapter::PhysicalDevice;
         let heart_bytes =
             include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
 
@@ -990,15 +989,16 @@ where
         let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.vert.spv");
         let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.frag.spv");
 
+        /* TODO: Hmm
         let align = device
             .factory
             .physical()
             .limits()
             .min_uniform_buffer_offset_alignment;
+            */
 
         let aux = Aux {
             frames: frames as _,
-            align,
 
             draws,
             camera: UniformData {
