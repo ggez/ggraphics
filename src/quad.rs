@@ -274,8 +274,7 @@ where
 /// Rendy doesn't do any synchronization for us
 /// beyond guarenteeing that when we get a new frame
 /// index everything touched by that frame index is
-/// now free to reuse.  So we just make one entire
-/// set of data per frame.
+/// now free to reuse.
 ///
 /// We could make different frames share buffers
 /// and descriptor sets and such and only change bits
@@ -302,8 +301,6 @@ where
 {
     /// The buffer where we store instance data.
     buffer: InstanceBuffer<B>,
-    // /// One descriptor set per draw call we do.
-    //descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
     /// The frame's local copy of uniform data.
     push_constants: [u32; 32],
 }
@@ -351,68 +348,12 @@ where
         // TODO: Figure out max length.
         let buffer_count = MAX_OBJECTS; // * draw_calls.len();
         let buffer = InstanceBuffer::new(buffer_count.try_into().unwrap(), factory);
-        //let descriptor_sets = vec![];
         let ret = Self {
             buffer,
-            //descriptor_sets,
             push_constants: [0; 32],
         };
-        /*
-        for draw_call in draw_calls {
-            // all descriptor sets use the same layout
-            // we need one per draw call, per frame in flight.
-            ret.create_descriptor_sets(factory, draw_call, descriptor_set, align);
-        }
-        */
         ret
     }
-
-    /*
-    /// Takes a draw call and creates a descriptor set that points
-    /// at its resources.
-    ///
-    /// For now we do not care about preserving descriptor sets between draw calls.
-    /// TODO: This "one per draw call" bit is weird, see if that can be improved...
-    /// Basically we need the texture and sampler info to shove into the descriptor sets,
-    /// and those are specific to each draw call.
-    /// The layout is defined by the `FrameInFlight` though.  See if that can be refactored
-    /// somehow.
-    /// Perhaps a DrawCall should manage its own descriptor sets?
-    fn create_descriptor_sets(
-        &mut self,
-        factory: &Factory<B>,
-        draw_call: &QuadDrawCall<B>,
-        layout: &Handle<DescriptorSetLayout<B>>,
-        _align: u64,
-    ) {
-        // Does this sampler need to stay alive?  We pass a
-        // reference to it elsewhere in an `unsafe` block...
-        // It's cached in the Factory anyway, so I don't think so.
-        let sampler = factory
-            .get_sampler(draw_call.sampler_info.clone())
-            .expect("Could not get sampler");
-
-        unsafe {
-            let set = factory.create_descriptor_set(layout.clone()).unwrap();
-            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
-                set: set.raw(),
-                binding: 1,
-                array_offset: 0,
-                descriptors: vec![hal::pso::Descriptor::Image(
-                    draw_call.texture.view().raw(),
-                    hal::image::Layout::ShaderReadOnlyOptimal,
-                )],
-            }));
-            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
-                set: set.raw(),
-                binding: 2,
-                array_offset: 0,
-                descriptors: vec![hal::pso::Descriptor::Sampler(sampler.raw())],
-            }));
-            self.descriptor_sets.push(set);
-        }
-    }
-    */
 
     /// This happens before a frame; it should take a LIST of draw calls and take
     /// care of uploading EACH of them into the buffer so they don't clash!
@@ -623,7 +564,7 @@ pub struct Aux<B: hal::Backend> {
 
 const MAX_OBJECTS: usize = 10_000;
 
-/// Render group that consist of simple graphics pipeline.
+/// Render group describing a graph node that renders quads.
 #[derive(Debug)]
 pub struct QuadRenderGroup<B>
 where
@@ -716,7 +657,6 @@ where
             factory
                 .device()
                 .create_pipeline_layout(desc_set_layout_list, layout_push_constants)
-            //.create_pipeline_layout(vec![set_layouts.iter().map(|l| l.raw()), layout_push_constants)
         }?;
 
         let mut vertex_buffers = Vec::new();
@@ -851,12 +791,14 @@ where
             factory
                 .device()
                 .destroy_pipeline_layout(self.pipeline_layout);
-            //drop(self.set_layouts);
         }
     }
 }
 
-pub fn push_vertex_desc(
+/// Add a description of our vertex buffer elements to the given
+/// vertex buffer and attribute descriptors.  Maybe this can be merged
+/// back into QuadRenderGroup::build() ?
+fn push_vertex_desc(
     elements: &[hal::pso::Element<hal::format::Format>],
     stride: hal::pso::ElemStride,
     rate: hal::pso::VertexInputRate,
@@ -905,10 +847,8 @@ where
     Arc::new(texture)
 }
 
-/// Creates a shader builder from the given GLSL shader source texts.
-///
-/// Also takes names for the vertex and fragment shaders to be used
-/// in debugging output.
+/// Creates a shader builder from the given raw SPIR-V byte buffers.
+/// Alignment and byte-order is handled for you.
 pub fn load_shaders(vertex_src: &[u8], fragment_src: &[u8]) -> rendy::shader::ShaderSetBuilder {
     use rendy::shader::SpirvShader;
     let vert_cursor = io::Cursor::new(vertex_src);
@@ -930,6 +870,7 @@ pub fn load_shaders(vertex_src: &[u8], fragment_src: &[u8]) -> rendy::shader::Sh
     shader_builder
 }
 
+/// Load shaders from the given file names.
 pub fn load_shader_files(
     vertex_file: &str,
     fragment_file: &str,
@@ -984,70 +925,11 @@ impl<B> GraphicsDevice<B>
 where
     B: hal::Backend,
 {
-    /*
-    Not sure this is useful after all...
-    We DO want to be able to modify the graph someday
-    and set up a new set of passes, but, not yet.
-    Issues to solve are how to handle the present node,
-    the color and depth buffers, etc.
-
-    Ok, the graph should separate out of this type.
-    Then we can also separat the winit window.
-
-    fn build_graph(&mut self) -> rendy::graph::Graph<B, Aux<B>> {
-        use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
-        let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
-
-        // let color = graph_builder.create_image(
-        //     window_kind,
-        //     1,
-        //     factory.get_surface_format(&surface),
-        //     Some(hal::command::ClearValue::Color([0.1, 0.2, 0.3, 1.0].into())),
-        // );
-        // let depth = graph_builder.create_image(
-        //     window_kind,
-        //     1,
-        //     hal::format::Format::D16Unorm,
-        //     Some(hal::command::ClearValue::DepthStencil(
-        //         hal::command::ClearDepthStencil(1.0, 0),
-        //     )),
-        // );
-        let render_group_desc = QuadRenderGroupDesc::new();
-        let pass = graph_builder.add_node(
-            render_group_desc
-                .builder()
-                .into_subpass()
-                .with_color(self.color)
-                .with_depth_stencil(self.depth)
-                .into_pass(),
-        );
-
-        let surface = self.factory.create_surface(&self.window);
-        let present_builder =
-            PresentNode::builder(&self.factory, surface, self.color).with_dependency(pass);
-
-        let frames = present_builder.image_count();
-        let graph = graph_builder
-            .with_frames_in_flight(self.frame_count)
-            .build(&mut self.factory, &mut self.families, &self.aux)
-            .unwrap();
-
-        graph
-    }
-    */
-
     pub fn new() -> Self {
         use rendy::factory::Config;
-        //use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
-        //use rendy::hal::PhysicalDevice as _;
         let config: Config = Default::default();
 
         let (factory, families): (Factory<B>, _) = rendy::factory::init(config).unwrap();
-
-        //let width = 800u32;
-        //let height = 600u32;
-
-        //let window_kind = hal::image::Kind::D2(width, height, 1, 1);
 
         // TODO: HACK suggested by Frizi, just use queue 0 for everything
         // instead of getting it from `graph.node_queue(pass)`.
@@ -1073,14 +955,15 @@ pub struct GraphicsWindowThing<B>
 where
     B: hal::Backend,
 {
-    // winit types
+    // winit window stuff
     pub window: winit::Window,
     pub event_loop: winit::EventsLoop,
-    // Rendy types
+    // Graph, gfx device and render targets
     pub graph: rendy::graph::Graph<B, Aux<B>>,
     pub device: GraphicsDevice<B>,
     pub depth: rendy::graph::ImageId,
     pub color: rendy::graph::ImageId,
+    // Our stuff
     pub aux: Aux<B>,
 }
 
@@ -1111,7 +994,6 @@ where
             &device.factory,
             &desc_set_layout,
         )];
-        //let draws = vec![];
 
         let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.vert.spv");
         let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.frag.spv");
@@ -1121,9 +1003,6 @@ where
             .physical()
             .limits()
             .min_uniform_buffer_offset_alignment;
-
-        let width = width;
-        let height = height;
 
         let aux = Aux {
             frames: frames as _,
