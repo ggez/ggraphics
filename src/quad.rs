@@ -362,8 +362,6 @@ where
         factory: &Factory<B>,
         uniforms: &UniformData,
         draw_calls: &[QuadDrawCall<B>],
-        _layout: &Handle<DescriptorSetLayout<B>>,
-        _align: u64,
     ) {
         assert!(draw_calls.len() > 0);
         // Store the uniforms to be shoved into push constants this frame
@@ -392,7 +390,6 @@ where
         draw_calls: &[QuadDrawCall<B>],
         layout: &B::PipelineLayout,
         encoder: &mut RenderPassEncoder<'_, B>,
-        _align: u64,
     ) {
         //println!("Drawing {} draw calls", draw_calls.len());
         let mut instance_count: u64 = 0;
@@ -753,7 +750,7 @@ where
         let align = aux.align;
 
         let layout = &aux.layout;
-        self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
+        self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws);
         // TODO: Investigate this more...
         // Ooooooh in the example it always used the same draw command buffer 'cause it
         // always did indirect drawing, and just modified the draw command in the data buffer.
@@ -772,12 +769,7 @@ where
         aux: &Aux<B>,
     ) {
         encoder.bind_graphics_pipeline(&self.graphics_pipeline);
-        self.frames_in_flight[index].draw(
-            &aux.draws,
-            &self.pipeline_layout,
-            &mut encoder,
-            aux.align,
-        );
+        self.frames_in_flight[index].draw(&aux.draws, &self.pipeline_layout, &mut encoder);
     }
 
     fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {

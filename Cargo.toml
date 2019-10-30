@@ -10,13 +10,9 @@ license = "MIT"
 [dependencies]
 image = "0.22"
 log = "0.4"
-#winit = "0.19"
 rendy = {version = "0.4", default-features=false, features=["base", "texture-image", "vulkan-x11", "wsi-winit"]}
-#rendy = {version = "0.3", features=["texture-image", "vulkan", "dx12", "empty",
-#rendy = {git="https://github.com/amethyst/rendy.git", rev="5c35277f9080e0ea8b73096f62ddb399cf73820a", features=["texture-image", "vulkan"]}
 failure = "0.1"
 euclid = "0.20"
 
 
-palette = "0.4"
 oorandom = "11"
