@@ -41,7 +41,7 @@ pub type Rect = euclid::Rect<f32, euclid::UnknownUnit>;
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
     transform: [f32; 16],
-    src: [f32; 4],
+    rect: [f32; 4],
     color: [f32; 4],
 }
 
@@ -562,13 +562,12 @@ where
         if self.objects.len() < MAX_OBJECTS {
             let x = rng.rand_float() * max_width;
             let y = rng.rand_float() * max_height;
-            //println!("Adding object at {}x{}", x, y);
             let transform = Transform3::create_translation(x, y, -100.0);
             let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
             let color = [1.0, 0.0, 1.0, 1.0];
             let instance = QuadData {
-                transform: transform.to_row_major_array(),
-                src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
+                transform: transform.to_column_major_array(),
+                rect: [src.origin.x, src.origin.y, src.size.width, src.size.height],
                 color,
             };
             self.objects.push(instance);
