@@ -8,7 +8,7 @@ layout(location = 0) in vec4 model[4];
 layout(location = 4) in vec4 rect;
 layout(location = 5) in vec4 model_color;
 
-layout(push_constant) uniform PushConstantTest {
+layout(push_constant) uniform ModelView {
     mat4 proj;
     mat4 view;
 };

@@ -7,9 +7,15 @@
 // use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
 use ggraphics::quad::*;
+use pretty_env_logger;
+use log::*;
 
 fn main() {
+    pretty_env_logger::init();
     let mut x: GraphicsWindowThing<rendy::vulkan::Backend> = GraphicsWindowThing::new();
+    info!("Window set up");
     x.run();
+    info!("Window run finished");
     x.dispose();
+    info!("Window disposed");
 }

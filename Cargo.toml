@@ -14,5 +14,5 @@ rendy = {version = "0.4", default-features=false, features=["base", "texture-ima
 failure = "0.1"
 euclid = "0.20"
 
-
 oorandom = "11"
+pretty_env_logger = "0.3"

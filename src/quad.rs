@@ -24,6 +24,7 @@ use rendy::resource::{
 use rendy::texture::Texture;
 use rendy::wsi::winit;
 
+use log::*;
 use euclid;
 use oorandom;
 
@@ -270,6 +271,11 @@ where
     }
 }
 
+/// The type used for push constants sent to the shaders.
+/// This is its own type 'cause there's a couple places we need
+/// to use it and it's nice to keep in sync.
+type PushConstantsBuffer = [u32;32];
+
 /// What data we need for each frame in flight.
 /// Rendy doesn't do any synchronization for us
 /// beyond guarenteeing that when we get a new frame
@@ -302,7 +308,7 @@ where
     /// The buffer where we store instance data.
     buffer: InstanceBuffer<B>,
     /// The frame's local copy of uniform data.
-    push_constants: [u32; 32],
+    push_constants: PushConstantsBuffer,
 }
 
 impl<B> FrameInFlight<B>
@@ -562,6 +568,18 @@ pub struct Aux<B: hal::Backend> {
     pub layout: Handle<DescriptorSetLayout<B>>,
 }
 
+impl<B> Drop for Aux<B> where B: hal::Backend {
+    fn drop(&mut self) {
+        for draw in self.draws.drain(..) {
+            drop(draw);
+        }
+        //self.draws.clear();
+        info!("Dropped draw calls");
+        drop(&self.layout);
+        info!("Dropped layout");
+    }
+}
+
 const MAX_OBJECTS: usize = 10_000;
 
 /// Render group describing a graph node that renders quads.
@@ -639,11 +657,8 @@ where
 
         let layout_push_constants = vec![(
             hal::pso::ShaderStageFlags::ALL,
-            // Pretty sure the size of push constants is given in bytes,
-            // but even putting nonsense sizes in here seems to make
-            // the program run fine unless you put super extreme values in.
-            // Thanks, NVidia.
-            0..(mem::size_of::<UniformData>() as u32),
+            // This size is in number of u32's
+            0..((mem::size_of::<PushConstantsBuffer>() / mem::size_of::<u32>()) as u32),
         )];
 
         let vertices =
@@ -772,17 +787,26 @@ where
         self.frames_in_flight[index].draw(&aux.draws, &self.pipeline_layout, &mut encoder);
     }
 
-    fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
+    fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &Aux<B>) {
+        for drawcall in aux.draws.iter() {
+            drop(&drawcall);
+        }
+        info!("Disposing of QuadRenderGroup");
+        drop(aux);
+        info!("Dropped aux");
         unsafe {
             for frame in self.frames_in_flight.into_iter() {
                 frame.dispose(factory);
             }
+            info!("Disposed frames in flight");
             factory
                 .device()
                 .destroy_graphics_pipeline(self.graphics_pipeline);
+            info!("Destroyed pipeline");
             factory
                 .device()
                 .destroy_pipeline_layout(self.pipeline_layout);
+            info!("Destroyed pipeline layout");
         }
     }
 }
@@ -940,6 +964,16 @@ where
             families,
             queue_id,
         }
+    }
+}
+
+impl<B> Drop for GraphicsDevice<B> where B: hal::Backend,
+{
+    fn drop(&mut self) {
+        info!("Dropping families");
+        drop(&mut self.families);
+        info!("Dropping factory");
+        drop(&mut self.factory);
     }
 }
 
@@ -1132,6 +1166,9 @@ where
     pub fn dispose(mut self) {
         // TODO: This doesn't actually dispose of everything right.
         // Why not?
+        //info!("Dropping aux");
+        //drop(&mut self.aux);
+        info!("Disposing graph");
         self.graph.dispose(&mut self.device.factory, &self.aux);
         //self.device.factory.dispose(self.aux.
     }
