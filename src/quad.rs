@@ -373,10 +373,20 @@ where
         //assert!(draw_calls.len() > 0);
         // Store the uniforms to be shoved into push constants this frame
         // TODO: Be less crude about indexing and such.
-        for (i, vl) in uniforms.proj.to_row_major_array().into_iter().enumerate() {
+        for (i, vl) in uniforms
+            .proj
+            .to_column_major_array()
+            .into_iter()
+            .enumerate()
+        {
             self.push_constants[i] = vl.to_bits();
         }
-        for (i, vl) in uniforms.view.to_row_major_array().into_iter().enumerate() {
+        for (i, vl) in uniforms
+            .view
+            .to_column_major_array()
+            .into_iter()
+            .enumerate()
+        {
             self.push_constants[16 + i] = vl.to_bits();
         }
 
@@ -517,7 +527,8 @@ where
     ) {
         let x = rng.rand_float() * max_width;
         let y = rng.rand_float() * max_height;
-        let transform = Transform3::create_translation(x, y, -100.0);
+        let offset = euclid::Vector3D::new(x, y, 0.0);
+        let transform = Transform3::create_scale(100.0, 100.0, 1.0).post_translate(offset);
         let src = Rect::from(euclid::Size2D::new(100.0, 100.0));
         let color = [1.0, 0.0, 1.0, 1.0];
         let instance = QuadData {
@@ -931,8 +942,6 @@ loop {
     }
   }
 }
-
-
 */
 
 /// An initialized graphics device context,
@@ -1002,8 +1011,6 @@ where
     // Graph, gfx device and render targets
     pub graph: rendy::graph::Graph<B, Aux<B>>,
     pub device: GraphicsDevice<B>,
-    //pub depth: rendy::graph::ImageId,
-    //pub color: rendy::graph::ImageId,
     // Our stuff
     pub aux: Aux<B>,
 }
@@ -1051,7 +1058,7 @@ where
 
             draws,
             camera: UniformData {
-                proj: Transform3::ortho(0.0, width, height, 0.0, 1.0, 200.0),
+                proj: Transform3::ortho(0.0, width, height, 0.0, -100.0, 100.0),
 
                 view: Transform3::create_translation(0.0, 0.0, 10.0),
             },
@@ -1127,8 +1134,6 @@ where
             event_loop,
             graph,
             device,
-            //color,
-            //depth,
             aux,
         }
     }
@@ -1221,6 +1226,7 @@ pub struct DrawParam {
     */
 }
 
+/// Draws a quad with the given texture.
 pub fn draw<B>(
     ctx: &mut GraphicsWindowThing<B>,
     _target: (),
@@ -1240,8 +1246,8 @@ where
         let t2p: *const Texture<B> = t2.as_ref() as *const _;
         t1p == t2p
     }
-    // Do we need to create a new draw call, or just batch another item
-    // onto the existing one?
+    // Here is where we check whether we need to create a new draw call, or just batch
+    // another item onto the existing one
     let latest_draw_call = match ctx.aux.draws.last_mut() {
         Some(c) => c,
         None => {
