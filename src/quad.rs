@@ -265,6 +265,7 @@ where
     }
 
     pub fn dispose(self, factory: &Factory<B>) {
+        info!("Destroying instance buffer");
         unsafe {
             factory.destroy_relevant_buffer(Escape::unescape(self.buffer));
         }
@@ -457,6 +458,7 @@ where
     }
 
     pub fn dispose(self, factory: &Factory<B>) {
+        info!("FrameInFlight disposed");
         self.buffer.dispose(factory)
     }
 }
@@ -565,7 +567,7 @@ pub struct Aux<B: hal::Backend> {
     pub camera: UniformData,
 
     pub shader: rendy::shader::ShaderSetBuilder,
-    pub layout: Handle<DescriptorSetLayout<B>>,
+    layout: Handle<DescriptorSetLayout<B>>,
 }
 
 impl<B> Aux<B> where B: hal::Backend {
@@ -580,7 +582,7 @@ impl<B> Aux<B> where B: hal::Backend {
         */
         self.draws.clear();
         info!("Dropped draw calls");
-        drop(&self.layout);
+        //drop(&self.layout);
         info!("Dropped layout");
     }
 }
@@ -792,10 +794,7 @@ where
         self.frames_in_flight[index].draw(&aux.draws, &self.pipeline_layout, &mut encoder);
     }
 
-    fn dispose(self: Box<Self>, factory: &mut Factory<B>, aux: &Aux<B>) {
-        for drawcall in aux.draws.iter() {
-            drop(&drawcall);
-        }
+    fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
         info!("Disposing of QuadRenderGroup");
         unsafe {
             for frame in self.frames_in_flight.into_iter() {
@@ -990,8 +989,8 @@ where
     // Graph, gfx device and render targets
     pub graph: rendy::graph::Graph<B, Aux<B>>,
     pub device: GraphicsDevice<B>,
-    pub depth: rendy::graph::ImageId,
-    pub color: rendy::graph::ImageId,
+    //pub depth: rendy::graph::ImageId,
+    //pub color: rendy::graph::ImageId,
     // Our stuff
     pub aux: Aux<B>,
 }
@@ -1017,9 +1016,15 @@ where
             .into(); // Turn Escape into Handle
 
         let texture1 = make_texture(device, heart_bytes);
+        let texture2 = make_texture(device, heart_bytes);
         let draws = vec![
             QuadDrawCall::new(
             texture1,
+            &device.factory,
+            &desc_set_layout,
+            ),
+        QuadDrawCall::new(
+            texture2,
             &device.factory,
             &desc_set_layout,
         )];
@@ -1116,8 +1121,8 @@ where
             event_loop,
             graph,
             device,
-            color,
-            depth,
+            //color,
+            //depth,
             aux,
         }
     }
@@ -1174,7 +1179,6 @@ where
         self.aux.dispose();
         info!("Disposing graph");
         self.graph.dispose(&mut self.device.factory, &self.aux);
-        //self.device.factory.dispose(self.aux.
     }
 }
 
