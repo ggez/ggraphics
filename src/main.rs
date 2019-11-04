@@ -10,8 +10,8 @@
 // env RUST_LOG=warn,ggraphics=info cargo run
 
 use ggraphics::quad::*;
-use pretty_env_logger;
 use log::*;
+use pretty_env_logger;
 
 fn main() {
     pretty_env_logger::init();

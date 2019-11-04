@@ -411,6 +411,10 @@ where
         //println!("Drawing {} draw calls", draw_calls.len());
         let mut instance_count: u64 = 0;
         for draw_call in draw_calls {
+            // Skip empty draw calls, since buffers of length 0 are invalid
+            if draw_call.objects.is_empty() {
+                continue;
+            }
             //println!("Drawing {:#?}, {:#?}, {}", draw_call, descriptor_set, draw_offset);
 
             // This is a bit weird, but basically tells the thing where to find the
@@ -586,7 +590,7 @@ pub struct Aux<B: hal::Backend> {
     pub camera: UniformData,
 
     pub shader: rendy::shader::ShaderSetBuilder,
-    layout: Handle<DescriptorSetLayout<B>>,
+    layout: Option<Handle<DescriptorSetLayout<B>>>,
 }
 
 impl<B> Aux<B>
@@ -604,7 +608,7 @@ where
         */
         self.draws.clear();
         info!("Dropped draw calls");
-        //drop(&self.layout);
+        self.layout = None;
         info!("Dropped layout");
     }
 }
@@ -695,7 +699,7 @@ where
 
         // TODO: Verify this doesn't cause a double-free when combined with aux.layout
         // getting destroyed.
-        let desc_set_layout_list = vec![aux.layout.raw()];
+        let desc_set_layout_list = vec![aux.layout.as_ref().unwrap().raw()];
 
         let pipeline_layout = unsafe {
             factory
@@ -1036,11 +1040,11 @@ where
             .into(); // Turn Escape into Handle
 
         let texture1 = make_texture(device, heart_bytes);
-        let texture2 = make_texture(device, heart_bytes);
-        let draws = vec![
-            QuadDrawCall::new(texture1, &device.factory, &desc_set_layout),
-            QuadDrawCall::new(texture2, &device.factory, &desc_set_layout),
-        ];
+        let draws = vec![QuadDrawCall::new(
+            texture1,
+            &device.factory,
+            &desc_set_layout,
+        )];
 
         let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.vert.spv");
         let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.frag.spv");
@@ -1064,7 +1068,7 @@ where
             },
 
             shader: load_shader_files(vertex_file, fragment_file),
-            layout: desc_set_layout,
+            layout: Some(desc_set_layout),
         };
         aux
     }
@@ -1251,7 +1255,11 @@ where
     let latest_draw_call = match ctx.aux.draws.last_mut() {
         Some(c) => c,
         None => {
-            let c = QuadDrawCall::new(drawable.clone(), &ctx.device.factory, &ctx.aux.layout);
+            let c = QuadDrawCall::new(
+                drawable.clone(),
+                &ctx.device.factory,
+                ctx.aux.layout.as_ref().unwrap(),
+            );
             ctx.aux.draws.push(c);
             ctx.aux.draws.last_mut().expect("Should never happen")
         }
