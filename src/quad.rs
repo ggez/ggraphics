@@ -1250,6 +1250,7 @@ impl GraphicsWindowThing
 
             if *control_flow == ControlFlow::Exit {
                 if let Some(graph) = graph.take() {
+                    aux.dispose();
                     graph.dispose(&mut device.factory, &aux);
                 }
             }
