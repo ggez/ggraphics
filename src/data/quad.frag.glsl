@@ -3,7 +3,7 @@
 
 layout(early_fragment_tests) in;
 
-layout(location = 0) in vec4 in_pos;
+layout(location = 0) in vec4 frag_pos;
 layout(location = 1) in vec4 frag_color;
 layout(location = 2) in vec4 uv;
 

@@ -31,7 +31,7 @@ void main() {
     mat4 model_mat = mat4(model[0], model[1], model[2], model[3]);
 
     frag_color = model_color;
-    vec2 vertex = vertices[gl_VertexIndex % 6];
+    vec4 vertex = vec4(vertices[gl_VertexIndex % 6], 0.0, 0.0);
     //frag_pos = model_mat * vec4(vertex, 0.0, 1.0);
     frag_pos = vec4(vertex.x * 10, vertex.y * 10, 0.0, 1.0);
     // TODO: Have unit quad's and scale verts properly by some multiplier,
@@ -41,6 +41,5 @@ void main() {
     //uv = vec4(vertex.x, 1 -vertex.y, 0.0, 0.0);
 
     // TODO: Fix depth crap!
-    gl_Position = frag_pos * proj * view;
-    gl_Position.z = 0.5;
+    gl_Position = vertex * proj * view;
 }
