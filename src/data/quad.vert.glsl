@@ -8,7 +8,7 @@ layout(location = 0) in vec4 model[4];
 layout(location = 4) in vec4 rect;
 layout(location = 5) in vec4 model_color;
 
-layout(push_constant) uniform PushConstantTest {
+layout(push_constant) uniform ModelView {
     mat4 proj;
     mat4 view;
 };
@@ -32,12 +32,13 @@ void main() {
 
     frag_color = model_color;
     vec2 vertex = vertices[gl_VertexIndex % 6];
-    frag_pos = model_mat * vec4(vertex, 0.0, 1.0);
+    //frag_pos = model_mat * vec4(vertex, 0.0, 1.0);
+    frag_pos = vec4(vertex.x * 10, vertex.y * 10, 0.0, 1.0);
     // TODO: Have unit quad's and scale verts properly by some multiplier,
     // instead of having to divide by the size of the quad
     // We also invert Y here to make things right-side up.
     //uv = vec4(pos.x / 100.0, 1 - (pos.y / 100.0), 0, 0);
-    uv = vec4(vertex.x, 1 -vertex.y, 0.0, 0.0);
+    //uv = vec4(vertex.x, 1 -vertex.y, 0.0, 0.0);
 
     // TODO: Fix depth crap!
     gl_Position = frag_pos * proj * view;

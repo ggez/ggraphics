@@ -25,6 +25,7 @@ use rendy::texture::Texture;
 use rendy::wsi::winit;
 
 use euclid;
+use log::*;
 use oorandom;
 
 pub type Point2 = euclid::Point2D<f32, euclid::UnknownUnit>;
@@ -264,11 +265,17 @@ where
     }
 
     pub fn dispose(self, factory: &Factory<B>) {
+        info!("Destroying instance buffer");
         unsafe {
             factory.destroy_relevant_buffer(Escape::unescape(self.buffer));
         }
     }
 }
+
+/// The type used for push constants sent to the shaders.
+/// This is its own type 'cause there's a couple places we need
+/// to use it and it's nice to keep in sync.
+type PushConstantsBuffer = [u32; 32];
 
 /// What data we need for each frame in flight.
 /// Rendy doesn't do any synchronization for us
@@ -302,7 +309,7 @@ where
     /// The buffer where we store instance data.
     buffer: InstanceBuffer<B>,
     /// The frame's local copy of uniform data.
-    push_constants: [u32; 32],
+    push_constants: PushConstantsBuffer,
 }
 
 impl<B> FrameInFlight<B>
@@ -363,7 +370,7 @@ where
         uniforms: &UniformData,
         draw_calls: &[QuadDrawCall<B>],
     ) {
-        assert!(draw_calls.len() > 0);
+        //assert!(draw_calls.len() > 0);
         // Store the uniforms to be shoved into push constants this frame
         // TODO: Be less crude about indexing and such.
         for (i, vl) in uniforms.proj.to_row_major_array().into_iter().enumerate() {
@@ -451,6 +458,7 @@ where
     }
 
     pub fn dispose(self, factory: &Factory<B>) {
+        info!("FrameInFlight disposed");
         self.buffer.dispose(factory)
     }
 }
@@ -567,7 +575,27 @@ pub struct Aux<B: hal::Backend> {
     pub camera: UniformData,
 
     pub shader: rendy::shader::ShaderSetBuilder,
-    pub layout: Handle<DescriptorSetLayout<B>>,
+    layout: Handle<DescriptorSetLayout<B>>,
+}
+
+impl<B> Aux<B>
+where
+    B: hal::Backend,
+{
+    /// for SOME reason, doing this in a Drop impl doesn't work right, it either
+    /// doesn't get called at all or gets called at the wrong time.  Even when we
+    /// call it by hand.  So I guess I'm just doing this instead.
+    fn dispose(&mut self) {
+        /*
+        for draw in self.draws.drain(..) {
+            drop(draw);
+        }
+        */
+        self.draws.clear();
+        info!("Dropped draw calls");
+        //drop(&self.layout);
+        info!("Dropped layout");
+    }
 }
 
 const MAX_OBJECTS: usize = 10_000;
@@ -647,11 +675,8 @@ where
 
         let layout_push_constants = vec![(
             hal::pso::ShaderStageFlags::ALL,
-            // Pretty sure the size of push constants is given in bytes,
-            // but even putting nonsense sizes in here seems to make
-            // the program run fine unless you put super extreme values in.
-            // Thanks, NVidia.
-            0..(mem::size_of::<UniformData>() as u32),
+            // This size is in number of u32's
+            0..((mem::size_of::<PushConstantsBuffer>() / mem::size_of::<u32>()) as u32),
         )];
 
         let vertices =
@@ -781,16 +806,20 @@ where
     }
 
     fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
+        info!("Disposing of QuadRenderGroup");
         unsafe {
             for frame in self.frames_in_flight.into_iter() {
                 frame.dispose(factory);
             }
+            info!("Disposed frames in flight");
             factory
                 .device()
                 .destroy_graphics_pipeline(self.graphics_pipeline);
+            info!("Destroyed pipeline");
             factory
                 .device()
                 .destroy_pipeline_layout(self.pipeline_layout);
+            info!("Destroyed pipeline layout");
         }
     }
 }
@@ -951,6 +980,18 @@ where
     }
 }
 
+impl<B> Drop for GraphicsDevice<B>
+where
+    B: hal::Backend,
+{
+    fn drop(&mut self) {
+        info!("Dropping families");
+        drop(&mut self.families);
+        info!("Dropping factory");
+        drop(&mut self.factory);
+    }
+}
+
 pub struct GraphicsWindowThing<B>
 where
     B: hal::Backend,
@@ -961,8 +1002,8 @@ where
     // Graph, gfx device and render targets
     pub graph: rendy::graph::Graph<B, Aux<B>>,
     pub device: GraphicsDevice<B>,
-    pub depth: rendy::graph::ImageId,
-    pub color: rendy::graph::ImageId,
+    //pub depth: rendy::graph::ImageId,
+    //pub color: rendy::graph::ImageId,
     // Our stuff
     pub aux: Aux<B>,
 }
@@ -988,11 +1029,11 @@ where
             .into(); // Turn Escape into Handle
 
         let texture1 = make_texture(device, heart_bytes);
-        let draws = vec![QuadDrawCall::new(
-            texture1,
-            &device.factory,
-            &desc_set_layout,
-        )];
+        let texture2 = make_texture(device, heart_bytes);
+        let draws = vec![
+            QuadDrawCall::new(texture1, &device.factory, &desc_set_layout),
+            QuadDrawCall::new(texture2, &device.factory, &desc_set_layout),
+        ];
 
         let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.vert.spv");
         let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/quad.frag.spv");
@@ -1086,8 +1127,8 @@ where
             event_loop,
             graph,
             device,
-            color,
-            depth,
+            //color,
+            //depth,
             aux,
         }
     }
@@ -1148,9 +1189,10 @@ where
     }
 
     pub fn dispose(mut self) {
-        // TODO: This doesn't actually dispose of everything right.
-        // Why not?
         // Things maybe not disposed: Texture?  DescriptorSet?
+        info!("Disposing aux");
+        self.aux.dispose();
+        info!("Disposing graph");
         self.graph.dispose(&mut self.device.factory, &self.aux);
     }
 }

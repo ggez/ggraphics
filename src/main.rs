@@ -6,10 +6,19 @@
 
 // use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
+// Suggested logging level for resource debugging:
+// env RUST_LOG=warn,ggraphics=info cargo run
+
 use ggraphics::quad::*;
+use pretty_env_logger;
+use log::*;
 
 fn main() {
+    pretty_env_logger::init();
     let mut x: GraphicsWindowThing<rendy::vulkan::Backend> = GraphicsWindowThing::new();
+    info!("Window set up");
     x.run();
+    info!("Window run finished");
     x.dispose();
+    info!("Window disposed");
 }

@@ -17,6 +17,6 @@ layout(push_constant) uniform PushConstantTest {
 };
 
 void main() {
-    color = texture(sampler2D(colortex, colorsampler), uv.xy) * frag_color;
-    //color = vec4(1,1,1,1);
+    //color = texture(sampler2D(colortex, colorsampler), uv.xy) * frag_color;
+    color = vec4(1,1,1,1);
 }
