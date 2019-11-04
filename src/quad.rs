@@ -495,21 +495,29 @@ where
             descriptor_set,
         }
     }
-
-    pub fn add_object(&mut self, rng: &mut oorandom::Rand32, max_width: f32, max_height: f32) {
+    pub fn add_quad(&mut self, instance: QuadData) {
         if self.objects.len() < MAX_OBJECTS {
-            let x = rng.rand_float() * max_width;
-            let y = rng.rand_float() * max_height;
-            let transform = Transform3::create_translation(x, y, -100.0);
-            let src = Rect::from(euclid::Size2D::new(100.0, 100.0));
-            let color = [1.0, 0.0, 1.0, 1.0];
-            let instance = QuadData {
-                transform: transform.to_column_major_array(),
-                rect: [src.origin.x, src.origin.y, src.size.width, src.size.height],
-                color,
-            };
             self.objects.push(instance);
         }
+    }
+
+    pub fn add_random_object(
+        &mut self,
+        rng: &mut oorandom::Rand32,
+        max_width: f32,
+        max_height: f32,
+    ) {
+        let x = rng.rand_float() * max_width;
+        let y = rng.rand_float() * max_height;
+        let transform = Transform3::create_translation(x, y, -100.0);
+        let src = Rect::from(euclid::Size2D::new(100.0, 100.0));
+        let color = [1.0, 0.0, 1.0, 1.0];
+        let instance = QuadData {
+            transform: transform.to_column_major_array(),
+            rect: [src.origin.x, src.origin.y, src.size.width, src.size.height],
+            color,
+        };
+        self.add_quad(instance);
     }
 
     fn create_descriptor_set(
@@ -1111,7 +1119,7 @@ where
                 );
                 // Add another object
                 for draw_call in &mut self.aux.draws {
-                    draw_call.add_object(&mut rng, 1024.0, 768.0);
+                    draw_call.add_random_object(&mut rng, 1024.0, 768.0);
                 }
                 if should_close {
                     break;
@@ -1129,11 +1137,21 @@ where
             fps
         );
     }
+
+    pub fn draw(&mut self) {
+        self.device.factory.maintain(&mut self.device.families);
+        self.graph.run(
+            &mut self.device.factory,
+            &mut self.device.families,
+            &self.aux,
+        );
+    }
+
     pub fn dispose(mut self) {
         // TODO: This doesn't actually dispose of everything right.
         // Why not?
+        // Things maybe not disposed: Texture?  DescriptorSet?
         self.graph.dispose(&mut self.device.factory, &self.aux);
-        //self.device.factory.dispose(self.aux.
     }
 }
 
@@ -1161,6 +1179,45 @@ pub struct DrawParam {
     */
 }
 
-pub fn draw(_ctx: &mut (), _target: (), _drawable: (), _param: DrawParam) -> Result<(), ()> {
+pub fn draw<B>(
+    ctx: &mut GraphicsWindowThing<B>,
+    _target: (),
+    drawable: Arc<Texture<B>>,
+    param: DrawParam,
+) -> Result<(), ()>
+where
+    B: hal::Backend,
+{
+    /// Texture's aren't Eq and so we have a slightly ugly pointer comparison to
+    /// see if two Arc<Texture> 's point to the same thing.
+    fn texture_compare<B>(t1: &Arc<Texture<B>>, t2: &Arc<Texture<B>>) -> bool
+    where
+        B: hal::Backend,
+    {
+        let t1p: *const Texture<B> = t1.as_ref() as *const _;
+        let t2p: *const Texture<B> = t2.as_ref() as *const _;
+        t1p == t2p
+    }
+    // Do we need to create a new draw call, or just batch another item
+    // onto the existing one?
+    let latest_draw_call = match ctx.aux.draws.last_mut() {
+        Some(c) => c,
+        None => {
+            let c = QuadDrawCall::new(drawable.clone(), &ctx.device.factory, &ctx.aux.layout);
+            ctx.aux.draws.push(c);
+            ctx.aux.draws.last_mut().expect("Should never happen")
+        }
+    };
+    if texture_compare(&latest_draw_call.texture, &drawable) {
+        let transform = Transform3::create_translation(param.dest.x, param.dest.y, -100.0);
+        let src = Rect::from(euclid::Size2D::new(100.0, 100.0));
+        let color = [1.0, 0.0, 1.0, 1.0];
+        let instance = QuadData {
+            transform: transform.to_column_major_array(),
+            rect: [src.origin.x, src.origin.y, src.size.width, src.size.height],
+            color,
+        };
+        latest_draw_call.add_quad(instance);
+    }
     Ok(())
 }
