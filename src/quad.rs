@@ -993,18 +993,6 @@ where
     }
 }
 
-impl<B> Drop for GraphicsDevice<B>
-where
-    B: hal::Backend,
-{
-    fn drop(&mut self) {
-        info!("Dropping families");
-        drop(&mut self.families);
-        info!("Dropping factory");
-        drop(&mut self.factory);
-    }
-}
-
 pub struct GraphicsWindowThing<B>
 where
     B: hal::Backend,
