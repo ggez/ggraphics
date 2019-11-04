@@ -15,10 +15,9 @@ use pretty_env_logger;
 
 fn main() {
     pretty_env_logger::init();
-    let mut x: GraphicsWindowThing<rendy::vulkan::Backend> = GraphicsWindowThing::new();
-    info!("Window set up");
-    x.run();
+    info!("Logging started");
+    GraphicsWindowThing::run();
     info!("Window run finished");
-    x.dispose();
+    //x.dispose();
     info!("Window disposed");
 }

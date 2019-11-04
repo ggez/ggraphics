@@ -25,7 +25,7 @@ use rendy::texture::Texture;
 
 use rendy::init::winit::event::{Event, WindowEvent};
 use rendy::init::winit::event_loop::{ControlFlow, EventLoop};
-use rendy::init::winit::window::WindowBuilder;
+use rendy::init::winit::window::{Window, WindowBuilder};
 
 use euclid;
 use log::*;
@@ -955,11 +955,9 @@ loop {
 }
 */
 
-/// An initialized graphics device context,
-/// with a window.  The window itself should
-/// be made optional later.  We need it for
-/// building a PresentNode but should be able
-/// to manage without it and add one later.
+/// An initialized graphics device context.
+/// Basically just a few things wrapped up together
+/// for convenience.
 pub struct GraphicsDevice<B>
 where
     B: hal::Backend,
@@ -974,20 +972,9 @@ impl<B> GraphicsDevice<B>
 where
     B: hal::Backend,
 {
-    pub fn new() -> Self {
+    pub fn new(factory: Factory<B>, families: rendy::command::Families<B>) -> Self {
         use rendy::factory::Config;
         let config: Config = Default::default();
-
-        let event_loop = EventLoop::new();
-        let window = WindowBuilder::new()
-            .with_title("Rendy example")
-            .with_inner_size((800, 600).into());
-
-        let rendy = rendy::init::AnyWindowedRendy::init_auto(&config, window, &event_loop).unwrap();
-        rendy::with_any_windowed_rendy!((rendy)
-        (mut factory, mut families, surface, window) => {
-
-        //let (factory, families): (Factory<B>, _) = rendy::factory::init(config).unwrap();
 
         // TODO: HACK suggested by Frizi, just use queue 0 for everything
         // instead of getting it from `graph.node_queue(pass)`.
@@ -1006,34 +993,102 @@ where
             families,
             queue_id,
         }
-        })
     }
 }
 
-pub struct GraphicsWindowThing<B>
+fn build_graph<B>(
+    device: &mut GraphicsDevice<B>,
+    surface: rendy::wsi::Surface<B>,
+    window: &Window,
+) -> (rendy::graph::Graph<B, Aux<B>>, Aux<B>)
 where
     B: hal::Backend,
 {
+    use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
+
+    let size = window.inner_size().to_physical(window.hidpi_factor());
+
+    let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
+    let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
+
+    let surface: rendy::wsi::Surface<B> = device.factory.create_surface(window).unwrap();
+    let format = device.factory.get_surface_format(&surface);
+    let color = graph_builder.create_image(
+        window_kind,
+        1,
+        device.factory.get_surface_format(&surface),
+        Some(hal::command::ClearValue {
+            color: hal::command::ClearColor {
+                float32: [0.1, 0.2, 0.3, 1.0],
+            },
+        }),
+    );
+    let depth = graph_builder.create_image(
+        window_kind,
+        1,
+        hal::format::Format::D16Unorm,
+        Some(hal::command::ClearValue {
+            depth_stencil: hal::command::ClearDepthStencil {
+                depth: 1.0,
+                stencil: 0,
+            },
+        }),
+    );
+    let render_group_desc = QuadRenderGroupDesc::new();
+    let pass = graph_builder.add_node(
+        render_group_desc
+            .builder()
+            .into_subpass()
+            .with_color(color)
+            .with_depth_stencil(depth)
+            .into_pass(),
+    );
+
+    println!("Surface format is {:?}", format);
+    let present_builder =
+        PresentNode::builder(&device.factory, surface, color).with_dependency(pass);
+    let frames = present_builder.image_count();
+    graph_builder.add_node(present_builder);
+
+    let aux = GraphicsWindowThing::make_aux(device, frames, size.width as f32, size.height as f32);
+    let graph = graph_builder
+        .with_frames_in_flight(frames)
+        .build(&mut device.factory, &mut device.families, &aux)
+        .unwrap();
+    (graph, aux)
+}
+
+pub struct GraphicsWindowThing
+//<B>
+//where
+//    B: hal::Backend,
+{
     // winit window stuff
-    pub window: winit::Window,
-    pub event_loop: winit::EventsLoop,
+    pub window: Window,
+    pub event_loop: EventLoop<()>,
     // Graph, gfx device and render targets
+    /*
     pub graph: rendy::graph::Graph<B, Aux<B>>,
     pub device: GraphicsDevice<B>,
     // Our stuff
     pub aux: Aux<B>,
+    */
 }
 
-impl<B> GraphicsWindowThing<B>
-where
-    B: hal::Backend,
+impl GraphicsWindowThing
+//<B>
+//where
+//    B: hal::Backend,
 {
-    pub fn make_aux(
+    pub fn make_aux<B>(
         device: &mut GraphicsDevice<B>,
         frames: u32,
         width: f32,
         height: f32,
-    ) -> Aux<B> {
+    ) -> Aux<B>
+    where
+        B: hal::Backend,
+    {
         let heart_bytes =
             include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
 
@@ -1078,90 +1133,144 @@ where
         aux
     }
 
-    pub fn new() -> Self {
+    /*
+    pub fn run() {
         use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
 
-        let mut event_loop = EventsLoop::new();
 
-        let window = WindowBuilder::new()
-            .with_title("Arglebargle")
-            .build(&event_loop)
-            .unwrap();
 
-        event_loop.poll_events(|_| ());
+                let size = window
+                    .get_inner_size()
+                    .unwrap()
+                    .to_physical(window.get_hidpi_factor());
+                let mut device = GraphicsDevice::<B>::new();
 
-        let size = window
-            .get_inner_size()
-            .unwrap()
-            .to_physical(window.get_hidpi_factor());
-        let mut device = GraphicsDevice::<B>::new();
+                let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
+                let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
 
-        let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
-        let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
+                let surface: rendy::wsi::Surface<B> = device.factory.create_surface(&window).unwrap();
+                let format = device.factory.get_surface_format(&surface);
+                let color = graph_builder.create_image(
+                    window_kind,
+                    1,
+                    device.factory.get_surface_format(&surface),
+                    Some(hal::command::ClearValue {
+                        color: hal::command::ClearColor {
+                            float32: [0.1, 0.2, 0.3, 1.0],
+                        },
+                    }),
+                );
+                let depth = graph_builder.create_image(
+                    window_kind,
+                    1,
+                    hal::format::Format::D16Unorm,
+                    Some(hal::command::ClearValue {
+                        depth_stencil: hal::command::ClearDepthStencil {
+                            depth: 1.0,
+                            stencil: 0,
+                        },
+                    }),
+                );
+                let render_group_desc = QuadRenderGroupDesc::new();
+                let pass = graph_builder.add_node(
+                    render_group_desc
+                        .builder()
+                        .into_subpass()
+                        .with_color(color)
+                        .with_depth_stencil(depth)
+                        .into_pass(),
+                );
 
-        let surface: rendy::wsi::Surface<B> = device.factory.create_surface(&window).unwrap();
-        let format = device.factory.get_surface_format(&surface);
-        let color = graph_builder.create_image(
-            window_kind,
-            1,
-            device.factory.get_surface_format(&surface),
-            Some(hal::command::ClearValue {
-                color: hal::command::ClearColor {
-                    float32: [0.1, 0.2, 0.3, 1.0],
-                },
-            }),
-        );
-        let depth = graph_builder.create_image(
-            window_kind,
-            1,
-            hal::format::Format::D16Unorm,
-            Some(hal::command::ClearValue {
-                depth_stencil: hal::command::ClearDepthStencil {
-                    depth: 1.0,
-                    stencil: 0,
-                },
-            }),
-        );
-        let render_group_desc = QuadRenderGroupDesc::new();
-        let pass = graph_builder.add_node(
-            render_group_desc
-                .builder()
-                .into_subpass()
-                .with_color(color)
-                .with_depth_stencil(depth)
-                .into_pass(),
-        );
+                println!("Surface format is {:?}", format);
+                let present_builder =
+                    PresentNode::builder(&device.factory, surface, color).with_dependency(pass);
+                let frames = present_builder.image_count();
+                graph_builder.add_node(present_builder);
 
-        println!("Surface format is {:?}", format);
-        let present_builder =
-            PresentNode::builder(&device.factory, surface, color).with_dependency(pass);
-        let frames = present_builder.image_count();
-        graph_builder.add_node(present_builder);
-
-        let aux = Self::make_aux(&mut device, frames, size.width as f32, size.height as f32);
-        let graph = graph_builder
-            .with_frames_in_flight(frames)
-            .build(&mut device.factory, &mut device.families, &aux)
-            .unwrap();
-
+                let aux = Self::make_aux(&mut device, frames, size.width as f32, size.height as f32);
+                let graph = graph_builder
+                    .with_frames_in_flight(frames)
+                    .build(&mut device.factory, &mut device.families, &aux)
+                    .unwrap();
         Self {
             window,
             event_loop,
+            /*
             graph,
             device,
             aux,
+            */
         }
     }
-    pub fn run(&mut self) {
+        */
+    pub fn run() {
         use std::time;
 
-        let mut frames = 0u64..;
+        let mut frame = 0;
         let mut rng = oorandom::Rand32::new(12345);
 
         let mut should_close = false;
 
-        let started = time::Instant::now();
+        use rendy::factory::Config;
+        let config: Config = Default::default();
+        let event_loop = EventLoop::new();
+        let window = WindowBuilder::new()
+            .with_title("Rendy example")
+            .with_inner_size((800, 600).into());
+
+        let rendy = rendy::init::AnyWindowedRendy::init_auto(&config, window, &event_loop).unwrap();
+        rendy::with_any_windowed_rendy!((rendy)
+        (factory, families, surface, window) => {
+            let mut device = GraphicsDevice::new(factory, families);
+            let (graph, mut aux) = build_graph(&mut device,surface, &window);
+            let mut graph = Some(graph);
+            let started = time::Instant::now();
+
+            event_loop.run(move |event, _, control_flow| {
+                *control_flow = ControlFlow::Poll;
+
+            match event {
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                    _ => {}
+                },
+                Event::EventsCleared => {
+                    device.factory.maintain(&mut device.families);
+                    if let Some(ref mut graph) = graph {
+                        graph.run(&mut device.factory, &mut device.families, &aux);
+                        frame += 1;
+                    }
+
+                    for draw_call in &mut aux.draws {
+                        draw_call.add_random_object(&mut rng, 1024.0, 768.0);
+                    }
+                }
+                _ => {}
+            }
+
+            if *control_flow == ControlFlow::Exit {
+                if let Some(graph) = graph.take() {
+                    graph.dispose(&mut device.factory, &aux);
+                }
+            }
+            });
+
+
+
+        let finished = time::Instant::now();
+        let dt = finished - started;
+        let millis = dt.as_millis() as f64;
+        let fps = frame as f64 / (millis / 1000.0);
+        println!(
+            "{} frames over {} seconds; {} fps",
+            frame,
+            millis / 1000.0,
+            fps
+        );
+        });
+
         // TODO: Someday actually check against MAX_OBJECTS
+        /*
         while !should_close {
             for _i in &mut frames {
                 self.device.factory.maintain(&mut self.device.families);
@@ -1186,36 +1295,32 @@ where
                 }
             }
         }
-        let finished = time::Instant::now();
-        let dt = finished - started;
-        let millis = dt.as_millis() as f64;
-        let fps = frames.start as f64 / (millis / 1000.0);
-        println!(
-            "{} frames over {} seconds; {} fps",
-            frames.start,
-            millis / 1000.0,
-            fps
-        );
+        */
     }
 
     pub fn draw(&mut self) {
+        /*
         self.device.factory.maintain(&mut self.device.families);
         self.graph.run(
             &mut self.device.factory,
             &mut self.device.families,
             &self.aux,
         );
+        */
     }
 
     pub fn dispose(mut self) {
+        /*
         // Things maybe not disposed: Texture?  DescriptorSet?
         info!("Disposing aux");
         self.aux.dispose();
         info!("Disposing graph");
         self.graph.dispose(&mut self.device.factory, &self.aux);
+        */
     }
 }
 
+/*
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct DrawParam {
     pub dest: Point2,
@@ -1242,7 +1347,7 @@ pub struct DrawParam {
 
 /// Draws a quad with the given texture.
 pub fn draw<B>(
-    ctx: &mut GraphicsWindowThing<B>,
+    ctx: &mut GraphicsWindowThing, //<B>,
     _target: (),
     drawable: Arc<Texture<B>>,
     param: DrawParam,
@@ -1287,3 +1392,4 @@ where
     }
     Ok(())
 }
+*/
