@@ -6,6 +6,9 @@
 
 // use winit::{Event, EventsLoop, WindowBuilder, WindowEvent};
 
+// Suggested logging level for resource debugging:
+// env RUST_LOG=warn,ggraphics=info cargo run
+
 use ggraphics::quad::*;
 use pretty_env_logger;
 use log::*;

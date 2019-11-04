@@ -369,7 +369,7 @@ where
         uniforms: &UniformData,
         draw_calls: &[QuadDrawCall<B>],
     ) {
-        assert!(draw_calls.len() > 0);
+        //assert!(draw_calls.len() > 0);
         // Store the uniforms to be shoved into push constants this frame
         // TODO: Be less crude about indexing and such.
         for (i, vl) in uniforms.proj.to_row_major_array().into_iter().enumerate() {
@@ -568,12 +568,17 @@ pub struct Aux<B: hal::Backend> {
     pub layout: Handle<DescriptorSetLayout<B>>,
 }
 
-impl<B> Drop for Aux<B> where B: hal::Backend {
-    fn drop(&mut self) {
+impl<B> Aux<B> where B: hal::Backend {
+    /// for SOME reason, doing this in a Drop impl doesn't work right, it either
+    /// doesn't get called at all or gets called at the wrong time.  Even when we
+    /// call it by hand.  So I guess I'm just doing this instead.
+    fn dispose(&mut self) {
+        /*
         for draw in self.draws.drain(..) {
             drop(draw);
         }
-        //self.draws.clear();
+        */
+        self.draws.clear();
         info!("Dropped draw calls");
         drop(&self.layout);
         info!("Dropped layout");
@@ -792,8 +797,6 @@ where
             drop(&drawcall);
         }
         info!("Disposing of QuadRenderGroup");
-        drop(aux);
-        info!("Dropped aux");
         unsafe {
             for frame in self.frames_in_flight.into_iter() {
                 frame.dispose(factory);
@@ -1014,7 +1017,8 @@ where
             .into(); // Turn Escape into Handle
 
         let texture1 = make_texture(device, heart_bytes);
-        let draws = vec![QuadDrawCall::new(
+        let draws = vec![
+            QuadDrawCall::new(
             texture1,
             &device.factory,
             &desc_set_layout,
@@ -1166,8 +1170,8 @@ where
     pub fn dispose(mut self) {
         // TODO: This doesn't actually dispose of everything right.
         // Why not?
-        //info!("Dropping aux");
-        //drop(&mut self.aux);
+        info!("Disposing aux");
+        self.aux.dispose();
         info!("Disposing graph");
         self.graph.dispose(&mut self.device.factory, &self.aux);
         //self.device.factory.dispose(self.aux.
