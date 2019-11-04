@@ -36,6 +36,17 @@ use std::io;
 use std::mem;
 use std::sync::Arc;
 
+use euclid;
+use oorandom;
+
+pub type Point2 = euclid::Point2D<f32, euclid::UnknownUnit>;
+pub type Transform3 = euclid::Transform3D<f32, euclid::UnknownUnit, euclid::UnknownUnit>;
+pub type Rect = euclid::Rect<f32, euclid::UnknownUnit>;
+
+pub mod quad;
+
+/*
+
 use rendy::command::{QueueId, RenderPassEncoder};
 use rendy::factory::{Factory, ImageState};
 use rendy::graph::{render::*, GraphContext, NodeBuffer, NodeImage};
@@ -49,16 +60,6 @@ use rendy::resource::{
 };
 use rendy::texture::Texture;
 use rendy::wsi::winit;
-
-use euclid;
-use oorandom;
-
-pub type Point2 = euclid::Point2D<f32, euclid::UnknownUnit>;
-pub type Transform3 = euclid::Transform3D<f32, euclid::UnknownUnit, euclid::UnknownUnit>;
-pub type Rect = euclid::Rect<f32, euclid::UnknownUnit>;
-
-pub mod quad;
-
 // TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
 // Perhaps.
 // For now though, this is okay if not great.
@@ -1380,3 +1381,4 @@ pub fn new_metal_device() -> GraphicsDevice<rendy::metal::Backend> {
 pub fn new_dx_device() -> GraphicsDevice<rendy::dx12::Backend> {
     GraphicsDevice::new()
 }
+*/

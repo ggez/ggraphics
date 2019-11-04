@@ -14,15 +14,18 @@ use rendy::command::{QueueId, RenderPassEncoder};
 use rendy::factory::{Factory, ImageState};
 use rendy::graph::{render::*, GraphContext, NodeBuffer, NodeImage};
 use rendy::hal;
-use rendy::hal::Device as _;
+use rendy::hal::device::Device;
 use rendy::memory::Dynamic;
 use rendy::mesh::AsVertex;
 use rendy::resource::{
-    Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
+    Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerDesc,
     WrapMode,
 };
 use rendy::texture::Texture;
-use rendy::wsi::winit;
+
+use rendy::init::winit::event::{Event, WindowEvent};
+use rendy::init::winit::event_loop::{ControlFlow, EventLoop};
+use rendy::init::winit::window::WindowBuilder;
 
 use euclid;
 use log::*;
@@ -495,7 +498,7 @@ where
     descriptor_set: Escape<DescriptorSet<B>>,
     /// We just need the actual config for the sampler 'cause
     /// Rendy's `Factory` can manage a sampler cache itself.
-    sampler_info: SamplerInfo,
+    sampler_info: SamplerDesc,
 }
 
 impl<B> QuadDrawCall<B>
@@ -507,7 +510,7 @@ where
         factory: &Factory<B>,
         layout: &Handle<DescriptorSetLayout<B>>,
     ) -> Self {
-        let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
+        let sampler_info = SamplerDesc::new(Filter::Nearest, WrapMode::Clamp);
         let descriptor_set =
             QuadDrawCall::create_descriptor_set(&*texture, &sampler_info, factory, layout);
         Self {
@@ -545,7 +548,7 @@ where
 
     fn create_descriptor_set(
         texture: &Texture<B>,
-        sampler_info: &SamplerInfo,
+        sampler_info: &SamplerDesc,
         factory: &Factory<B>,
         layout: &Handle<DescriptorSetLayout<B>>,
     ) -> Escape<DescriptorSet<B>> {
@@ -558,15 +561,17 @@ where
 
         unsafe {
             let set = factory.create_descriptor_set(layout.clone()).unwrap();
-            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
-                set: set.raw(),
-                binding: 1,
-                array_offset: 0,
-                descriptors: vec![hal::pso::Descriptor::Image(
-                    texture.view().raw(),
-                    hal::image::Layout::ShaderReadOnlyOptimal,
-                )],
-            }));
+            factory
+                .device()
+                .write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
+                    set: set.raw(),
+                    binding: 1,
+                    array_offset: 0,
+                    descriptors: vec![hal::pso::Descriptor::Image(
+                        texture.view().raw(),
+                        hal::image::Layout::ShaderReadOnlyOptimal,
+                    )],
+                }));
             factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
                 set: set.raw(),
                 binding: 2,
@@ -674,7 +679,7 @@ where
         subpass: hal::pass::Subpass<'_, B>,
         _buffers: Vec<NodeBuffer>,
         _images: Vec<NodeImage>,
-    ) -> Result<Box<dyn RenderGroup<B, Aux<B>>>, failure::Error> {
+    ) -> Result<Box<dyn RenderGroup<B, Aux<B>>>, hal::pso::CreationError> {
         let depth_stencil = hal::pso::DepthStencilDesc {
             depth: Some(hal::pso::DepthTest {
                 fun: hal::pso::Comparison::LessEqual,
@@ -684,8 +689,9 @@ where
             stencil: None,
         };
         let input_assembler_desc = hal::pso::InputAssemblerDesc {
-            primitive: hal::Primitive::TriangleList,
-            primitive_restart: hal::pso::PrimitiveRestart::Disabled,
+            primitive: hal::pso::Primitive::TriangleList,
+            with_adjacency: false,
+            restart_index: None,
         };
 
         let layout_push_constants = vec![(
@@ -730,7 +736,8 @@ where
         let shaders = match shader_set.raw() {
             Err(e) => {
                 shader_set.dispose(factory);
-                return Err(e);
+                // TODO: Better error type
+                return Err(hal::pso::CreationError::Other);
             }
             Ok(s) => s,
         };
@@ -971,7 +978,16 @@ where
         use rendy::factory::Config;
         let config: Config = Default::default();
 
-        let (factory, families): (Factory<B>, _) = rendy::factory::init(config).unwrap();
+        let event_loop = EventLoop::new();
+        let window = WindowBuilder::new()
+            .with_title("Rendy example")
+            .with_inner_size((800, 600).into());
+
+        let rendy = rendy::init::AnyWindowedRendy::init_auto(&config, window, &event_loop).unwrap();
+        rendy::with_any_windowed_rendy!((rendy)
+        (mut factory, mut families, surface, window) => {
+
+        //let (factory, families): (Factory<B>, _) = rendy::factory::init(config).unwrap();
 
         // TODO: HACK suggested by Frizi, just use queue 0 for everything
         // instead of getting it from `graph.node_queue(pass)`.
@@ -990,6 +1006,7 @@ where
             families,
             queue_id,
         }
+        })
     }
 }
 
@@ -1063,12 +1080,11 @@ where
 
     pub fn new() -> Self {
         use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
-        use winit::{EventsLoop, WindowBuilder};
 
         let mut event_loop = EventsLoop::new();
 
         let window = WindowBuilder::new()
-            .with_title("Rendy example")
+            .with_title("Arglebargle")
             .build(&event_loop)
             .unwrap();
 
@@ -1083,21 +1099,28 @@ where
         let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
         let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
 
-        let surface: rendy::wsi::Surface<B> = device.factory.create_surface(&window);
+        let surface: rendy::wsi::Surface<B> = device.factory.create_surface(&window).unwrap();
         let format = device.factory.get_surface_format(&surface);
         let color = graph_builder.create_image(
             window_kind,
             1,
             device.factory.get_surface_format(&surface),
-            Some(hal::command::ClearValue::Color([0.1, 0.2, 0.3, 1.0].into())),
+            Some(hal::command::ClearValue {
+                color: hal::command::ClearColor {
+                    float32: [0.1, 0.2, 0.3, 1.0],
+                },
+            }),
         );
         let depth = graph_builder.create_image(
             window_kind,
             1,
             hal::format::Format::D16Unorm,
-            Some(hal::command::ClearValue::DepthStencil(
-                hal::command::ClearDepthStencil(1.0, 0),
-            )),
+            Some(hal::command::ClearValue {
+                depth_stencil: hal::command::ClearDepthStencil {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            }),
         );
         let render_group_desc = QuadRenderGroupDesc::new();
         let pass = graph_builder.add_node(
@@ -1131,7 +1154,6 @@ where
     }
     pub fn run(&mut self) {
         use std::time;
-        use winit::{Event, WindowEvent};
 
         let mut frames = 0u64..;
         let mut rng = oorandom::Rand32::new(12345);
