@@ -11,7 +11,8 @@ license = "MIT"
 image = "0.22"
 log = "0.4"
 #rendy = {version = "0.4", default-features=false, features=["base", "texture-image", "vulkan-x11", "wsi-winit"]}
-rendy = {version = "0.5", default-features=false, features=["base", "texture-image", "vulkan", "init-winit", "wsi"]}
+rendy = {version = "0.5", default-features=false, features=["base",
+"texture-image", "vulkan", "init-winit", "wsi", "metal", "dx12"]}
 failure = "0.1"
 euclid = "0.20"
 
