@@ -1,10 +1,11 @@
 From https://github.com/grovesNL/glow/tree/master/examples/hello
 
 ```
-cargo +nightly build --target wasm32-unknown-unknown
 mkdir -p generated
-wasm-bindgen target/wasm32-unknown-unknown/debug/ggraphics.wasm --out-dir generated --no-modules
 cp index.html generated
+cargo build --target wasm32-unknown-unknown
+wasm-bindgen target/wasm32-unknown-unknown/debug/ggraphics.wasm --out-dir generated --no-modules
+rsync -av generated/ my_server.org:htdocs/temp/gg
 ```
 
 
