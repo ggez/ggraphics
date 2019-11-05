@@ -696,8 +696,8 @@ where
 
         let layout_push_constants = vec![(
             hal::pso::ShaderStageFlags::ALL,
-            // This size is in number of u32's
-            0..((mem::size_of::<PushConstantsBuffer>() / mem::size_of::<u32>()) as u32),
+            // This size is in BYTES now AUGH
+            0..(mem::size_of::<PushConstantsBuffer>() as u32),
         )];
 
         let vertices =
