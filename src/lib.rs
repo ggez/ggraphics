@@ -32,6 +32,8 @@ Then actual last step will be to have multiple render passes with different
 render targets.
 */
 
+/*
+
 use std::io;
 use std::mem;
 use std::sync::Arc;
@@ -1380,3 +1382,4 @@ pub fn new_metal_device() -> GraphicsDevice<rendy::metal::Backend> {
 pub fn new_dx_device() -> GraphicsDevice<rendy::dx12::Backend> {
     GraphicsDevice::new()
 }
+*/
