@@ -20,8 +20,13 @@ glow = {version = "0.3.0-alpha3", default-features=false, features=["glutin"]}
 glutin = "0.22.0-alpha3"
 
 
+#[target.'cfg(target_arch = "wasm32")'.dependencies]
+#glow = {version = "0.3.0-alpha3", default-features=false, features=["stdweb"]}
+#stdweb  = { version = "0.4.18" }
+#webgl_stdweb = { version = "0.3" }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-glow = {version = "0.3.0-alpha3", default-features=false, features=["stdweb", "webgl_stdweb"]}
-std_web  = { version = "0.4.18", package = "stdweb" }
-webgl_stdweb = { version = "0.3" }
+glow = {version = "0.3.0-alpha3", default-features=false, features=["web-sys"]}
+web_sys = { version = "0.3", package = "web-sys", features=["console"] }
+wasm-bindgen = { version = "0.2" }
 

@@ -1,3 +1,13 @@
+From https://github.com/grovesNL/glow/tree/master/examples/hello
+
+```
+cargo +nightly build --target wasm32-unknown-unknown
+mkdir -p generated
+wasm-bindgen target/wasm32-unknown-unknown/debug/ggraphics.wasm --out-dir generated --no-modules
+cp index.html generated
+```
+
+
 # ggraphics
 
 Eventually, hopefully, a 2D graphics library using gfx-rs, to serve as a
@@ -159,7 +169,7 @@ takes subpass's, and a single subpass can be trivially turned into a
 pass containing just that.  It looks like the `SubpassBuilder` takes
 color and depth buffers (as inputs or outputs???) as well as some
 dependency info that the `Graph` uses to order its various `Node`s
-appropriately(?).  
+appropriately(?).
 
 ooooooh, color and depth buffers are created by
 `GraphBuilder::create_image()` and then handed to a subpass with
@@ -262,7 +272,7 @@ from omniviral:
    last time this index was received are complete.  Which means you
    can safely access resources used previously with this index."
  * Again per omniviral, we can have one set of buffers/descriptors per
-   frame-in-flight but it 
+   frame-in-flight but it
  * In ggez's case, meshes and textures are not going to change, but
    uniforms and instance data will.  Those aren't really in the main
    buffer anyway, so.
@@ -277,10 +287,10 @@ For each different thing we're drawing, we need:
 
  * A mesh, a texture, a sampler, a DescriptorSetLayout, and a
    descriptor set matchin the layout.
- * 
+ *
 
 Read-only data (meshes, textures, samplers, descriptor set layouts) can be shared between
-frames in flight.  R/W data (buffers, descriptor sets) cannot.  
+frames in flight.  R/W data (buffers, descriptor sets) cannot.
 
 Switching shaders involves switching pipelines, which we're not doing
 yet.

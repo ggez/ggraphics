@@ -3,28 +3,34 @@
 
 use glow::*;
 
-#[cfg(all(target_arch = "wasm32", feature = "stdweb"))]
-use std_web::{
-    traits::*,
-    unstable::TryInto,
-    web::{document, html_element::*},
-};
-#[cfg(all(target_arch = "wasm32", feature = "stdweb"))]
-use webgl_stdweb::WebGL2RenderingContext;
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
+pub fn wasm_main() {
+    main();
+}
 
 fn main() {
     unsafe {
-        #[cfg(all(target_arch = "wasm32", feature = "stdweb"))]
+        // Create a context from a WebGL2 context on wasm32 targets
+        #[cfg(target_arch = "wasm32")]
         let (_window, gl, _events_loop, render_loop, shader_version) = {
-            let canvas: CanvasElement = document()
-                .create_element("canvas")
+            use wasm_bindgen::JsCast;
+            let canvas = web_sys::window()
                 .unwrap()
-                .try_into()
+                .document()
+                .unwrap()
+                .get_element_by_id("canvas")
+                .unwrap()
+                .dyn_into::<web_sys::HtmlCanvasElement>()
                 .unwrap();
-            document().body().unwrap().append_child(&canvas);
-            canvas.set_width(640);
-            canvas.set_height(480);
-            let webgl2_context: WebGL2RenderingContext = canvas.get_context().unwrap();
+            let webgl2_context = canvas
+                .get_context("webgl2")
+                .unwrap()
+                .unwrap()
+                .dyn_into::<web_sys::WebGl2RenderingContext>()
+                .unwrap();
             (
                 (),
                 glow::Context::from_webgl2_context(webgl2_context),
