@@ -101,9 +101,10 @@ impl GlContext {
                 vec2(0.0f, 0.0f),
                 vec2(1.0f, 0.0f)
             );
+            in vec2 offset;
             out vec2 vert;
             void main() {
-                vert = verts[gl_VertexID];
+                vert = verts[gl_VertexID] + offset;
                 gl_Position = vec4(vert - 0.5, 0.0, 1.0);
             }"#;
             let fragment_shader_source = r#"precision mediump float;
@@ -175,9 +176,10 @@ pub struct DrawParam {
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
-    transform: [f32; 16],
-    rect: [f32; 4],
-    color: [f32; 4],
+    //transform: [f32; 16],
+    //rect: [f32; 4],
+    //color: [f32; 4],
+    offset: [f32; 2],
 }
 
 /// A description of a sampler.  We cache the actual
@@ -198,6 +200,10 @@ impl QuadDrawCall {
             sampler,
             instances: vec![],
         }
+    }
+
+    pub fn add(&mut self, quad: QuadData) {
+        self.instances.push(quad);
     }
 
     unsafe fn draw(&self, gl: &Context) {
