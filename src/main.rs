@@ -32,40 +32,19 @@ impl Drop for GlContext {
 }
 
 impl GlContext {
-    fn new(gl: glow::Context, shader_version: &str) -> Self {
-        // GL SETUP
+    fn create_program(
+        gl: &glow::Context,
+        vertex_src: &str,
+        fragment_src: &str,
+        shader_version: &str,
+    ) -> <Context as glow::HasContext>::Program {
+        let shader_sources = [
+            (glow::VERTEX_SHADER, vertex_src),
+            (glow::FRAGMENT_SHADER, fragment_src),
+        ];
+
         unsafe {
-            let vertex_array = gl
-                .create_vertex_array()
-                .expect("Cannot create vertex array");
-            gl.bind_vertex_array(Some(vertex_array));
-
             let program = gl.create_program().expect("Cannot create program");
-
-            let (vertex_shader_source, fragment_shader_source) = (
-                r#"const vec2 verts[3] = vec2[3](
-                vec2(0.5f, 1.0f),
-                vec2(0.0f, 0.0f),
-                vec2(1.0f, 0.0f)
-            );
-            out vec2 vert;
-            void main() {
-                vert = verts[gl_VertexID];
-                gl_Position = vec4(vert - 0.5, 0.0, 1.0);
-            }"#,
-                r#"precision mediump float;
-            in vec2 vert;
-            out vec4 color;
-            void main() {
-                color = vec4(vert, 0.5, 1.0);
-            }"#,
-            );
-
-            let shader_sources = [
-                (glow::VERTEX_SHADER, vertex_shader_source),
-                (glow::FRAGMENT_SHADER, fragment_shader_source),
-            ];
-
             let mut shaders = Vec::with_capacity(shader_sources.len());
 
             for (shader_type, shader_source) in shader_sources.iter() {
@@ -90,6 +69,40 @@ impl GlContext {
                 gl.detach_shader(program, shader);
                 gl.delete_shader(shader);
             }
+            program
+        }
+    }
+
+    fn new(gl: glow::Context, shader_version: &str) -> Self {
+        // GL SETUP
+        unsafe {
+            let vertex_array = gl
+                .create_vertex_array()
+                .expect("Cannot create vertex array");
+            gl.bind_vertex_array(Some(vertex_array));
+
+            let vertex_shader_source = r#"const vec2 verts[3] = vec2[3](
+                vec2(0.5f, 1.0f),
+                vec2(0.0f, 0.0f),
+                vec2(1.0f, 0.0f)
+            );
+            out vec2 vert;
+            void main() {
+                vert = verts[gl_VertexID];
+                gl_Position = vec4(vert - 0.5, 0.0, 1.0);
+            }"#;
+            let fragment_shader_source = r#"precision mediump float;
+            in vec2 vert;
+            out vec4 color;
+            void main() {
+                color = vec4(vert, 0.5, 1.0);
+            }"#;
+            let program = Self::create_program(
+                &gl,
+                vertex_shader_source,
+                fragment_shader_source,
+                shader_version,
+            );
 
             gl.use_program(Some(program));
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
@@ -100,6 +113,66 @@ impl GlContext {
             }
         }
     }
+}
+
+/// Input to an instance
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct DrawParam {
+    /// TODO: euclid, vek, or what?  UGH.
+    pub dest: [f32; 2],
+    //pub dest: Point2,
+    /*
+    /// A portion of the drawable to clip, as a fraction of the whole image.
+    /// Defaults to the whole image `(0,0 to 1,1)` if omitted.
+    pub src: Rect,
+    /// The position to draw the graphic expressed as a `Point2`.
+    pub dest: mint::Point2<f32>,
+    /// The orientation of the graphic in radians.
+    pub rotation: f32,
+    /// The x/y scale factors expressed as a `Vector2`.
+    pub scale: mint::Vector2<f32>,
+    /// An offset from the center for transform operations like scale/rotation,
+    /// with `0,0` meaning the origin and `1,1` meaning the opposite corner from the origin.
+    /// By default these operations are done from the top-left corner, so to rotate something
+    /// from the center specify `Point2::new(0.5, 0.5)` here.
+    pub offset: mint::Point2<f32>,
+    /// A color to draw the target with.
+    /// Default: white.
+    pub color: Color,
+    */
+}
+
+/// Data we need for each quad instance.
+/// DrawParam gets turned into this, eventually.
+/// We have to be *quite particular* about layout since this gets
+/// fed straight to the shader.
+///
+/// TODO: Currently the shader doesn't use src or color though.
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct QuadData {
+    transform: [f32; 16],
+    rect: [f32; 4],
+    color: [f32; 4],
+}
+
+pub struct QuadDrawCall {
+    _texture: <Context as glow::HasContext>::Texture,
+    _sampler: <Context as glow::HasContext>::Sampler,
+    _instances: Vec<QuadData>,
+}
+
+pub struct QuadPipeline {
+    _drawcalls: Vec<QuadDrawCall>,
+    _program: <Context as glow::HasContext>::Program,
+}
+
+/// Currently, no input framebuffers or such.
+/// We're not actually intending to reproduce Rendy's Graph type here.
+/// This may eventually feed into a bounce buffer or such though.
+pub struct RenderPass {
+    _output_framebuffer: <Context as glow::HasContext>::Framebuffer,
+    _pipelines: Vec<QuadPipeline>,
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -142,8 +215,6 @@ fn run_wasm() {
             if !*running {
                 // Drop context, deleting its contents.
                 ctx = None;
-                //ctx.gl.delete_program(ctx.program);
-                //ctx.gl.delete_vertex_array(ctx.vertex_array);
             }
         });
     }
