@@ -4,6 +4,14 @@
 use glow::*;
 use log::*;
 
+// Shortcuts for various OpenGL types.
+
+type Texture = <Context as glow::HasContext>::Texture;
+type Sampler = <Context as glow::HasContext>::Sampler;
+type Program = <Context as glow::HasContext>::Program;
+type VertexArray = <Context as glow::HasContext>::VertexArray;
+type Framebuffer = <Context as glow::HasContext>::Framebuffer;
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -18,13 +26,15 @@ pub fn wasm_main() {
 /// at compile time, rather than trying to use generics or such.
 struct GlContext {
     gl: glow::Context,
-    program: <Context as glow::HasContext>::Program,
-    vertex_array: <Context as glow::HasContext>::VertexArray,
+    program: Program,
+    vertex_array: VertexArray,
+    pipeline: QuadPipeline,
 }
 
 impl Drop for GlContext {
     fn drop(&mut self) {
         unsafe {
+            self.pipeline.dispose(&self.gl);
             self.gl.delete_program(self.program);
             self.gl.delete_vertex_array(self.vertex_array);
         }
@@ -37,7 +47,7 @@ impl GlContext {
         vertex_src: &str,
         fragment_src: &str,
         shader_version: &str,
-    ) -> <Context as glow::HasContext>::Program {
+    ) -> Program {
         let shader_sources = [
             (glow::VERTEX_SHADER, vertex_src),
             (glow::FRAGMENT_SHADER, fragment_src),
@@ -73,6 +83,11 @@ impl GlContext {
         }
     }
 
+    unsafe fn create_texture(gl: &glow::Context) -> Texture {
+        let texture = gl.create_texture().unwrap();
+        texture
+    }
+
     fn new(gl: glow::Context, shader_version: &str) -> Self {
         // GL SETUP
         unsafe {
@@ -104,14 +119,23 @@ impl GlContext {
                 shader_version,
             );
 
-            gl.use_program(Some(program));
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
+            //gl.use_program(Some(program));
+            let mut pipeline = QuadPipeline::new(program);
+            let texture = Self::create_texture(&gl);
+            let drawcall = QuadDrawCall::new(texture, SamplerSpec {});
+            pipeline.drawcalls.push(drawcall);
             GlContext {
                 gl,
                 program,
                 vertex_array,
+                pipeline,
             }
         }
+    }
+
+    pub fn get_sampler(&mut self, spec: &SamplerSpec) -> Sampler {
+        unimplemented!()
     }
 }
 
@@ -156,22 +180,77 @@ pub struct QuadData {
     color: [f32; 4],
 }
 
+/// A description of a sampler.  We cache the actual
+/// samplers as needed in the GlContext.
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct SamplerSpec {}
+
 pub struct QuadDrawCall {
-    _texture: <Context as glow::HasContext>::Texture,
-    _sampler: <Context as glow::HasContext>::Sampler,
-    _instances: Vec<QuadData>,
+    texture: Texture,
+    sampler: SamplerSpec,
+    instances: Vec<QuadData>,
+}
+
+impl QuadDrawCall {
+    fn new(texture: Texture, sampler: SamplerSpec) -> Self {
+        Self {
+            texture,
+            sampler,
+            instances: vec![],
+        }
+    }
+
+    unsafe fn draw(&self, gl: &Context) {
+        // bind texture
+        // bind sampler
+        //let num_vertices = instances.len() * 3;
+        gl.draw_arrays(glow::TRIANGLES, 0, 3);
+    }
+
+    /// Destroy this thing's resources using the given gl context.
+    /// Must be the same gl context that created this, natch.
+    /// Horrible things will happen if it isn't.
+    ///
+    /// TODO: Arc textures?
+    /// TODO: Debug ID?
+    unsafe fn dispose(&mut self, gl: &Context) {
+        gl.delete_texture(self.texture);
+    }
 }
 
 pub struct QuadPipeline {
-    _drawcalls: Vec<QuadDrawCall>,
-    _program: <Context as glow::HasContext>::Program,
+    drawcalls: Vec<QuadDrawCall>,
+    program: Program,
+}
+
+impl QuadPipeline {
+    fn new(program: Program) -> Self {
+        Self {
+            drawcalls: vec![],
+            program,
+        }
+    }
+
+    unsafe fn draw(&self, gl: &Context) {
+        gl.use_program(Some(self.program));
+        for dc in self.drawcalls.iter() {
+            dc.draw(gl);
+        }
+    }
+
+    unsafe fn dispose(&mut self, gl: &Context) {
+        for mut dc in self.drawcalls.drain(..) {
+            dc.dispose(gl);
+        }
+        gl.delete_program(self.program);
+    }
 }
 
 /// Currently, no input framebuffers or such.
 /// We're not actually intending to reproduce Rendy's Graph type here.
 /// This may eventually feed into a bounce buffer or such though.
 pub struct RenderPass {
-    _output_framebuffer: <Context as glow::HasContext>::Framebuffer,
+    _output_framebuffer: Framebuffer,
     _pipelines: Vec<QuadPipeline>,
 }
 
@@ -209,7 +288,8 @@ fn run_wasm() {
         render_loop.run(move |running: &mut bool| {
             if let Some(ictx) = &ctx {
                 ictx.gl.clear(glow::COLOR_BUFFER_BIT);
-                ictx.gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                //ictx.gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                ictx.pipeline.draw(&ictx.gl);
             }
 
             if !*running {
