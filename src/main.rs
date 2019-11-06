@@ -1,5 +1,11 @@
 // Suggested logging level for debugging:
 // env RUST_LOG=info cargo run
+//
+// Next up: Vertex array objects and buffer objects.
+// VAO's basically describe what the array looks like.
+// VBO's contain the data.
+// See the Rust gamedev discord for more, around Nov 6 2019
+// 16:00 EST
 
 use glow::*;
 use log::*;

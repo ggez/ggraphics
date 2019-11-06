@@ -7,6 +7,10 @@ description = "A 2d graphics library (tentative)"
 license = "MIT"
 
 
+[profile.dev]
+# Useful for making smaller wasm binaries
+opt-level = "s"
+
 [dependencies]
 image = {version = "0.22", default-features=false, features=["jpeg", "png_codec", "pnm", "tiff", "webp", "bmp", "hdr", "dxt"] }
 log = "0.4"
