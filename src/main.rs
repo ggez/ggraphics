@@ -7,6 +7,8 @@
 // See the Rust gamedev discord for more, around Nov 6 2019
 // 16:00 EST
 
+use std::mem;
+
 use glow::*;
 use log::*;
 
@@ -17,6 +19,7 @@ type Sampler = <Context as glow::HasContext>::Sampler;
 type Program = <Context as glow::HasContext>::Program;
 type VertexArray = <Context as glow::HasContext>::VertexArray;
 type Framebuffer = <Context as glow::HasContext>::Framebuffer;
+type Buffer = <Context as glow::HasContext>::Buffer;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -85,6 +88,9 @@ impl GlContext {
                 gl.detach_shader(program, shader);
                 gl.delete_shader(shader);
             }
+            // TODO:
+            // By default only one output so this isn't necessary
+            // glBindFragDataLocation(shaderProgram, 0, "outColor");
             program
         }
     }
@@ -130,7 +136,12 @@ impl GlContext {
             //gl.use_program(Some(program));
             let mut pipeline = QuadPipeline::new(program);
             let texture = Self::create_texture(&gl);
-            let drawcall = QuadDrawCall::new(texture, SamplerSpec {});
+            let mut drawcall = QuadDrawCall::new(&gl, texture, SamplerSpec {}, &pipeline.program);
+            drawcall.add(QuadData { offset: [0.5, 0.5] });
+            drawcall.add(QuadData {
+                offset: [-0.5, 0.5],
+            });
+            drawcall.add(QuadData { offset: [0.0, 0.0] });
             pipeline.drawcalls.push(drawcall);
             GlContext {
                 gl,
@@ -197,14 +208,36 @@ pub struct QuadDrawCall {
     texture: Texture,
     sampler: SamplerSpec,
     instances: Vec<QuadData>,
+    vbo: Buffer,
+    vao: VertexArray,
 }
 
 impl QuadDrawCall {
-    fn new(texture: Texture, sampler: SamplerSpec) -> Self {
-        Self {
-            texture,
-            sampler,
-            instances: vec![],
+    fn new(gl: &Context, texture: Texture, sampler: SamplerSpec, shader: &Program) -> Self {
+        // TODO: Audit unsafe
+        unsafe {
+            let vao = gl.create_vertex_array().unwrap();
+            gl.bind_vertex_array(Some(vao));
+            // TODO: https://github.com/grovesNL/glow/issues/54
+            let offset_attrib = gl.get_attrib_location(*shader, "offset") as u32;
+            gl.vertex_attrib_pointer_f32(offset_attrib, 2, glow::FLOAT, false, 0, 0);
+            // TODO: Double-check if 3 is correct
+            gl.vertex_attrib_divisor(offset_attrib, 3);
+            gl.enable_vertex_attrib_array(offset_attrib);
+
+            let vbo = gl.create_buffer().unwrap();
+            // TODO: Double-check that this bind sticks to the VAO,
+            // though currently it doesn't matter 'cause we re-bind it so that
+            // we can fill it with instance data on draw
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+            gl.bind_vertex_array(None);
+            Self {
+                vbo,
+                vao,
+                texture,
+                sampler,
+                instances: vec![],
+            }
         }
     }
 
@@ -213,10 +246,22 @@ impl QuadDrawCall {
     }
 
     unsafe fn draw(&self, gl: &Context) {
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+        //gl.bind_vertex_array(Some(self.vao));
+        // TODO: Invalidate buffer on change instead of refilling it all the time
+        // TODO: Make instance data cast not suck
+        let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
+        let bytes_ptr = self.instances.as_ptr() as *const u8;
+        let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
+        // TODO: Make usage sensible
+        //gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
         // bind texture
         // bind sampler
-        //let num_vertices = instances.len() * 3;
-        gl.draw_arrays(glow::TRIANGLES, 0, 3);
+        let num_vertices = self.instances.len() * 3;
+        println!("Drawing {} verts", num_vertices);
+        //gl.draw_arrays(glow::TRIANGLES, 0, 3);
+        gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
     }
 
     /// Destroy this thing's resources using the given gl context.
@@ -361,7 +406,8 @@ fn run_glutin() {
                         WindowEvent::RedrawRequested => {
                             info!("WindowEvent::RedrawRequested");
                             ctx.gl.clear(glow::COLOR_BUFFER_BIT);
-                            ctx.gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                            //ctx.gl.draw_arrays(glow::TRIANGLES, 0, 3);
+                            ctx.pipeline.draw(&ctx.gl);
                             windowed_context.swap_buffers().unwrap();
                         }
                         WindowEvent::CloseRequested => {
