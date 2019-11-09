@@ -113,6 +113,9 @@ impl GlContext {
                 vec2(0.0f, 0.0f),
                 vec2(1.0f, 0.0f)
             );
+            layout(std140) uniform QuadData {
+                vec2 offset2,
+            } quad_data;
             in vec2 offset;
             out vec2 vert;
             void main() {
@@ -223,6 +226,7 @@ pub struct QuadDrawCall {
     instances: Vec<QuadData>,
     vbo: Buffer,
     vao: VertexArray,
+    ubo: Buffer,
 }
 
 impl QuadDrawCall {
@@ -262,9 +266,13 @@ impl QuadDrawCall {
             gl.vertex_attrib_divisor(offset_attrib, 1);
             gl.enable_vertex_attrib_array(offset_attrib);
 
+            let ubo = gl.create_buffer().unwrap();
+            let quad_idx = gl.get_uniform_block_index(*shader, "QuadData").unwrap();
+
             gl.bind_vertex_array(None);
             Self {
                 vbo,
+                ubo,
                 vao,
                 texture,
                 sampler,
@@ -289,6 +297,10 @@ impl QuadDrawCall {
         // TODO: Make usage sensible
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
         gl.bind_buffer(glow::ARRAY_BUFFER, None);
+
+        gl.bind_buffer(glow::UNIFORM_BUFFER, Some(self.ubo));
+        gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, bytes_slice, glow::STREAM_DRAW);
+        gl.bind_buffer(glow::UNIFORM_BUFFER, None);
     }
 
     unsafe fn draw(&self, gl: &Context) {
