@@ -116,7 +116,7 @@ impl GlContext {
             in vec2 offset;
             out vec2 vert;
             void main() {
-                vert = verts[gl_VertexID] + offset;
+                vert = verts[gl_VertexID % 3] + offset;
                 gl_Position = vec4(vert - 0.5, 0.0, 1.0);
             }"#;
             let fragment_shader_source = r#"precision mediump float;
@@ -137,17 +137,6 @@ impl GlContext {
             let mut pipeline = QuadPipeline::new(program);
             let texture = Self::create_texture(&gl);
             let mut drawcall = QuadDrawCall::new(&gl, texture, SamplerSpec {}, &pipeline.program);
-            
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            /*
             drawcall.add(QuadData {
                 offset: [-0.5, 0.5],
             });
@@ -163,7 +152,6 @@ impl GlContext {
             drawcall.add(QuadData { offset: [0.0, 0.0] });
             drawcall.add(QuadData { offset: [0.0, 0.0] });
             drawcall.add(QuadData { offset: [0.0, 0.0] });
-            */
             pipeline.drawcalls.push(drawcall);
             GlContext {
                 gl,
@@ -307,7 +295,11 @@ impl QuadDrawCall {
         let bytes_ptr = f32_buffer.as_ptr() as *const u8;
         let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
         println!("{:?}", bytes_slice);
-        println!("Num instances: {}, num bytes: {}", self.instances.len(), num_bytes);
+        println!(
+            "Num instances: {}, num bytes: {}",
+            self.instances.len(),
+            num_bytes
+        );
         // TODO: Make usage sensible
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
     }
@@ -322,7 +314,7 @@ impl QuadDrawCall {
         println!("Drawing {} verts", num_vertices);
         //gl.draw_arrays(glow::TRIANGLES, 0, 3);
         gl.bind_vertex_array(Some(self.vao));
-        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo)); 
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
         gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
     }
 
