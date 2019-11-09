@@ -413,6 +413,9 @@ fn run_glutin() {
                 .with_title("Hello triangle!")
                 .with_inner_size(glutin::dpi::LogicalSize::new(1024.0, 768.0));
             let windowed_context = glutin::ContextBuilder::new()
+                // TODO: Specific GL versions.
+                .with_gl(glutin::GlRequest::Latest)
+                .with_gl_profile(glutin::GlProfile::Core)
                 .with_vsync(true)
                 .build_windowed(wb, &el)
                 .unwrap();
