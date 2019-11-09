@@ -137,10 +137,20 @@ impl GlContext {
             let mut pipeline = QuadPipeline::new(program);
             let texture = Self::create_texture(&gl);
             let mut drawcall = QuadDrawCall::new(&gl, texture, SamplerSpec {}, &pipeline.program);
-            drawcall.add(QuadData { offset: [0.5, 0.5] });
             drawcall.add(QuadData {
                 offset: [-0.5, 0.5],
             });
+            drawcall.add(QuadData {
+                offset: [-0.5, 0.5],
+            });
+            drawcall.add(QuadData {
+                offset: [-0.5, 0.5],
+            });
+            drawcall.add(QuadData { offset: [0.5, 0.5] });
+            drawcall.add(QuadData { offset: [0.5, 0.5] });
+            drawcall.add(QuadData { offset: [0.5, 0.5] });
+            drawcall.add(QuadData { offset: [0.0, 0.0] });
+            drawcall.add(QuadData { offset: [0.0, 0.0] });
             drawcall.add(QuadData { offset: [0.0, 0.0] });
             pipeline.drawcalls.push(drawcall);
             GlContext {
@@ -190,7 +200,9 @@ pub struct DrawParam {
 /// fed straight to the shader.
 ///
 /// TODO: Currently the shader doesn't use src or color though.
-#[repr(C, align(16))]
+/// TODO: Figure out correct alignment...
+//#[repr(C, align(16))]
+#[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
     //transform: [f32; 16],
@@ -218,18 +230,33 @@ impl QuadDrawCall {
         unsafe {
             let vao = gl.create_vertex_array().unwrap();
             gl.bind_vertex_array(Some(vao));
-            // TODO: https://github.com/grovesNL/glow/issues/54
-            let offset_attrib = gl.get_attrib_location(*shader, "offset") as u32;
-            gl.vertex_attrib_pointer_f32(offset_attrib, 2, glow::FLOAT, false, 0, 0);
-            // TODO: Double-check if 3 is correct
-            gl.vertex_attrib_divisor(offset_attrib, 3);
-            gl.enable_vertex_attrib_array(offset_attrib);
 
+            // TODO: Double-check that this bind sticks to the VAO,
+            // though currently it doesn't matter 'cause we re-bind it so that
+            // we can fill it with instance data on draw
+            // Okay, it looks like which VBO is bound IS part of the VAO data,
+            // and it is stored *when glVertexAttribPointer is called*.
+            // According to https://open.gl/drawing at least.
+            // And, that stuff I THINK is stored IN THE ATTRIBUTE INFO,
+            // in this case `offset_attrib`, and then THAT gets attached
+            // to the VAO by enable_vertex_attrib_array()
+            //
+            // Wait, no, maybe it has to be done after the VAO is bound,
+            // and the attribs are part of that?  The same link
+            // says that, but says it AFTER it talks about the VBO, so
             let vbo = gl.create_buffer().unwrap();
             // TODO: Double-check that this bind sticks to the VAO,
             // though currently it doesn't matter 'cause we re-bind it so that
             // we can fill it with instance data on draw
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+
+            // TODO: https://github.com/grovesNL/glow/issues/54
+            let offset_attrib = gl.get_attrib_location(*shader, "offset") as u32;
+            gl.vertex_attrib_pointer_f32(offset_attrib, 2, glow::FLOAT, false, 0, 0);
+            // TODO: Double-check if 3 is correct
+            //gl.vertex_attrib_divisor(offset_attrib, 3);
+            gl.enable_vertex_attrib_array(offset_attrib);
+
             gl.bind_vertex_array(None);
             Self {
                 vbo,
@@ -245,22 +272,40 @@ impl QuadDrawCall {
         self.instances.push(quad);
     }
 
-    unsafe fn draw(&self, gl: &Context) {
+    /// Upload the array of instances to our VBO
+    unsafe fn upload_instances(&self, gl: &Context) {
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
-        //gl.bind_vertex_array(Some(self.vao));
         // TODO: Invalidate buffer on change instead of refilling it all the time
         // TODO: Make instance data cast not suck
+        /*
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
         let bytes_ptr = self.instances.as_ptr() as *const u8;
         let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
+        */
+
+        // Is Vec<QuadData> not packed properly?  What's up?
+        let mut f32_buffer: Vec<f32> = vec![];
+        for instance in self.instances.iter() {
+            f32_buffer.push(instance.offset[0]);
+            f32_buffer.push(instance.offset[1]);
+        }
+        let num_bytes = f32_buffer.len() * mem::size_of::<f32>();
+        let bytes_ptr = f32_buffer.as_ptr() as *const u8;
+        let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
         // TODO: Make usage sensible
-        //gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
+    }
+
+    unsafe fn draw(&self, gl: &Context) {
+        self.upload_instances(gl);
         // bind texture
         // bind sampler
-        let num_vertices = self.instances.len() * 3;
+        // Use this when we figure out heckin' instancing
+        //let num_vertices = self.instances.len() * 3;
+        let num_vertices = self.instances.len();
         println!("Drawing {} verts", num_vertices);
         //gl.draw_arrays(glow::TRIANGLES, 0, 3);
+        gl.bind_vertex_array(Some(self.vao));
         gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
     }
 
