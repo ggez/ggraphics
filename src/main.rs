@@ -133,7 +133,6 @@ impl GlContext {
             );
 
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
-            //gl.use_program(Some(program));
             let mut pipeline = QuadPipeline::new(program);
             let texture = Self::create_texture(&gl);
             let mut drawcall = QuadDrawCall::new(&gl, texture, SamplerSpec {}, &pipeline.program);
@@ -245,15 +244,18 @@ impl QuadDrawCall {
             // and the attribs are part of that?  The same link
             // says that, but says it AFTER it talks about the VBO, so
             let vbo = gl.create_buffer().unwrap();
-            // TODO: Double-check that this bind sticks to the VAO,
-            // though currently it doesn't matter 'cause we re-bind it so that
-            // we can fill it with instance data on draw
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
             // TODO: https://github.com/grovesNL/glow/issues/54
             let offset_attrib = gl.get_attrib_location(*shader, "offset") as u32;
-            // gl.vertex_attrib_pointer_f32(offset_attrib, 2, glow::FLOAT, false, (2 * mem::size_of::<f32>()) as i32, 0);
-            gl.vertex_attrib_pointer_f32(offset_attrib, 2, glow::FLOAT, false, 8, 0);
+            gl.vertex_attrib_pointer_f32(
+                offset_attrib,
+                2,
+                glow::FLOAT,
+                false,
+                (2 * mem::size_of::<f32>()) as i32,
+                0,
+            );
             // TODO: Double-check if 3 is correct
             //gl.vertex_attrib_divisor(offset_attrib, 3);
             gl.enable_vertex_attrib_array(offset_attrib);
@@ -275,33 +277,16 @@ impl QuadDrawCall {
 
     /// Upload the array of instances to our VBO
     unsafe fn upload_instances(&self, gl: &Context) {
-        gl.bind_vertex_array(Some(self.vao));
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
         // TODO: Invalidate buffer on change instead of refilling it all the time
         // TODO: Make instance data cast not suck
-        /*
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
         let bytes_ptr = self.instances.as_ptr() as *const u8;
         let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
-        */
 
-        // Is Vec<QuadData> not packed properly?  What's up?
-        let mut f32_buffer: Vec<f32> = vec![];
-        for instance in self.instances.iter() {
-            f32_buffer.push(instance.offset[0]);
-            f32_buffer.push(instance.offset[1]);
-        }
-        let num_bytes = f32_buffer.len() * mem::size_of::<f32>();
-        let bytes_ptr = f32_buffer.as_ptr() as *const u8;
-        let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
-        println!("{:?}", bytes_slice);
-        println!(
-            "Num instances: {}, num bytes: {}",
-            self.instances.len(),
-            num_bytes
-        );
         // TODO: Make usage sensible
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
     }
 
     unsafe fn draw(&self, gl: &Context) {
@@ -311,10 +296,8 @@ impl QuadDrawCall {
         // Use this when we figure out heckin' instancing
         //let num_vertices = self.instances.len() * 3;
         let num_vertices = self.instances.len();
-        println!("Drawing {} verts", num_vertices);
         //gl.draw_arrays(glow::TRIANGLES, 0, 3);
         gl.bind_vertex_array(Some(self.vao));
-        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
         gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
     }
 
@@ -326,6 +309,8 @@ impl QuadDrawCall {
     /// TODO: Debug ID?
     unsafe fn dispose(&mut self, gl: &Context) {
         gl.delete_texture(self.texture);
+        gl.delete_buffer(self.vbo);
+        gl.delete_vertex_array(self.vao);
     }
 }
 
@@ -399,7 +384,6 @@ fn run_wasm() {
         render_loop.run(move |running: &mut bool| {
             if let Some(ictx) = &ctx {
                 ictx.gl.clear(glow::COLOR_BUFFER_BIT);
-                //ictx.gl.draw_arrays(glow::TRIANGLES, 0, 3);
                 ictx.pipeline.draw(&ictx.gl);
             }
 
