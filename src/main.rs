@@ -139,6 +139,8 @@ impl GlContext {
             drawcall.add(QuadData {
                 offset: [-0.5, 0.5],
             });
+            drawcall.add(QuadData { offset: [0.5, 0.5] });
+            drawcall.add(QuadData { offset: [0.0, 0.0] });
             drawcall.add(QuadData {
                 offset: [-0.5, 0.5],
             });
@@ -257,7 +259,7 @@ impl QuadDrawCall {
                 0,
             );
             // TODO: Double-check if 3 is correct
-            //gl.vertex_attrib_divisor(offset_attrib, 3);
+            gl.vertex_attrib_divisor(offset_attrib, 1);
             gl.enable_vertex_attrib_array(offset_attrib);
 
             gl.bind_vertex_array(None);
@@ -295,10 +297,17 @@ impl QuadDrawCall {
         // bind sampler
         // Use this when we figure out heckin' instancing
         //let num_vertices = self.instances.len() * 3;
-        let num_vertices = self.instances.len();
+        let num_instances = self.instances.len();
+        let num_vertices = 3;
         //gl.draw_arrays(glow::TRIANGLES, 0, 3);
         gl.bind_vertex_array(Some(self.vao));
-        gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
+        //gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
+        gl.draw_arrays_instanced(
+            glow::TRIANGLES,
+            0,
+            num_vertices as i32,
+            num_instances as i32,
+        );
     }
 
     /// Destroy this thing's resources using the given gl context.
