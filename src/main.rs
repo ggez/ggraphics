@@ -7,6 +7,7 @@
 // See the Rust gamedev discord for more, around Nov 6 2019
 // 16:00 EST
 
+use std::convert::TryFrom;
 use std::mem;
 
 use glow::*;
@@ -113,13 +114,11 @@ impl GlContext {
                 vec2(0.0f, 0.0f),
                 vec2(1.0f, 0.0f)
             );
-            layout(std140) uniform QuadData {
-                vec2 offset2,
-            } quad_data;
             in vec2 offset;
+            in vec2 offset2;
             out vec2 vert;
             void main() {
-                vert = verts[gl_VertexID % 3] + offset;
+                vert = verts[gl_VertexID % 3] + offset + offset2;
                 gl_Position = vec4(vert - 0.5, 0.0, 1.0);
             }"#;
             let fragment_shader_source = r#"precision mediump float;
@@ -142,6 +141,12 @@ impl GlContext {
             drawcall.add(QuadData {
                 offset: [-0.5, 0.5],
             });
+            drawcall.add(QuadData { offset: [0.5, 0.5] });
+            drawcall.add(QuadData { offset: [0.0, 0.0] });
+            drawcall.add(QuadData {
+                offset: [0.0, -0.5],
+            });
+            /*
             drawcall.add(QuadData {
                 offset: [-0.5, 0.5],
             });
@@ -154,6 +159,19 @@ impl GlContext {
             drawcall.add(QuadData { offset: [0.0, 0.0] });
             drawcall.add(QuadData { offset: [0.0, 0.0] });
             drawcall.add(QuadData { offset: [0.0, 0.0] });
+            drawcall.add(QuadData { offset: [0.0, 0.5] });
+            drawcall.add(QuadData { offset: [0.0, 0.5] });
+            drawcall.add(QuadData { offset: [0.0, 0.5] });
+            drawcall.add(QuadData {
+                offset: [0.0, -0.5],
+            });
+            drawcall.add(QuadData {
+                offset: [0.0, -0.5],
+            });
+            drawcall.add(QuadData {
+                offset: [0.0, -0.5],
+            });
+            */
             pipeline.drawcalls.push(drawcall);
             GlContext {
                 gl,
@@ -224,7 +242,7 @@ pub struct QuadDrawCall {
     instances: Vec<QuadData>,
     vbo: Buffer,
     vao: VertexArray,
-    ubo: Buffer,
+    instance_vbo: Buffer,
 }
 
 impl QuadDrawCall {
@@ -251,7 +269,7 @@ impl QuadDrawCall {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
             // TODO: https://github.com/grovesNL/glow/issues/54
-            let offset_attrib = gl.get_attrib_location(*shader, "offset") as u32;
+            let offset_attrib = u32::try_from(gl.get_attrib_location(*shader, "offset")).unwrap();
             gl.vertex_attrib_pointer_f32(
                 offset_attrib,
                 2,
@@ -264,16 +282,28 @@ impl QuadDrawCall {
             //gl.vertex_attrib_divisor(offset_attrib, 3);
             gl.enable_vertex_attrib_array(offset_attrib);
 
-            let ubo = gl.create_buffer().unwrap();
-            let quad_idx = gl.get_uniform_block_index(*shader, "QuadData").unwrap();
+            // Now create a VBO containing per-instance data
+            let instance_vbo = gl.create_buffer().unwrap();
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
+            let offset2_attrib = u32::try_from(gl.get_attrib_location(*shader, "offset2")).unwrap();
+            gl.vertex_attrib_pointer_f32(
+                offset2_attrib,
+                2,
+                glow::FLOAT,
+                false,
+                (2 * mem::size_of::<f32>()) as i32,
+                0,
+            );
+            gl.vertex_attrib_divisor(offset2_attrib, 1);
+            gl.enable_vertex_attrib_array(offset2_attrib);
 
             gl.bind_vertex_array(None);
             Self {
                 vbo,
-                ubo,
                 vao,
                 texture,
                 sampler,
+                instance_vbo,
                 instances: vec![],
             }
         }
@@ -290,15 +320,16 @@ impl QuadDrawCall {
         // TODO: Make instance data cast not suck
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
         let bytes_ptr = self.instances.as_ptr() as *const u8;
-        let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
+        let bytes_slice = &vec![0; num_bytes];
+        let bytes_slice2 = std::slice::from_raw_parts(bytes_ptr, num_bytes);
 
         // TODO: Make usage sensible
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
-        gl.bind_buffer(glow::ARRAY_BUFFER, None);
 
-        gl.bind_buffer(glow::UNIFORM_BUFFER, Some(self.ubo));
-        gl.buffer_data_u8_slice(glow::UNIFORM_BUFFER, bytes_slice, glow::STREAM_DRAW);
-        gl.bind_buffer(glow::UNIFORM_BUFFER, None);
+        // Fill instance buffer
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instance_vbo));
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice2, glow::STREAM_DRAW);
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
     }
 
     unsafe fn draw(&self, gl: &Context) {
@@ -308,9 +339,10 @@ impl QuadDrawCall {
         // Use this when we figure out heckin' instancing
         //let num_vertices = self.instances.len() * 3;
         let num_vertices = self.instances.len();
+        let num_instances = self.instances.len();
         //gl.draw_arrays(glow::TRIANGLES, 0, 3);
         gl.bind_vertex_array(Some(self.vao));
-        gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
+        gl.draw_arrays_instanced(glow::TRIANGLES, 0, 3, num_instances as i32); //num_vertices as i32, 9);
     }
 
     /// Destroy this thing's resources using the given gl context.
