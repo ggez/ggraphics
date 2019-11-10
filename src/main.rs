@@ -281,11 +281,11 @@ impl QuadDrawCall {
                 2,
                 glow::FLOAT,
                 false,
-                (2 * mem::size_of::<f32>()) as i32,
+                //(2 * mem::size_of::<f32>()) as i32,
+                0,
                 0,
             );
             // TODO: Double-check if 3 is correct
-            gl.vertex_attrib_divisor(offset_attrib, 1);
             gl.enable_vertex_attrib_array(offset_attrib);
 
             // Now create a VBO containing per-instance data
@@ -339,11 +339,14 @@ impl QuadDrawCall {
         // TODO: Make instance data cast not suck
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
         let bytes_ptr = self.instances.as_ptr() as *const u8;
-        let bytes_slice = &vec![0; num_bytes];
+        let empty_slice = &vec![0; self.instances.len() * 8 * 6];
         let bytes_slice2 = std::slice::from_raw_parts(bytes_ptr, num_bytes);
 
         // TODO: Make usage sensible
-        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
+        // Dummy data for per-vertex attributes
+        // TODO: This is a little awful, is there a better way?
+        // Can we just give it an empty or empty-ish array?
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, empty_slice, glow::STREAM_DRAW);
 
         // Fill instance buffer
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instance_vbo));
@@ -451,7 +454,7 @@ fn run_wasm() {
 
         // RENDER LOOP
         render_loop.run(move |running: &mut bool| {
-            if let Some(ictx) = &ctx {
+            if let Some(ictx) = &mut ctx {
                 ictx.gl.clear(glow::COLOR_BUFFER_BIT);
                 ictx.pipeline.draw(&ictx.gl);
             }
