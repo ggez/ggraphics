@@ -109,17 +109,21 @@ impl GlContext {
                 .expect("Cannot create vertex array");
             gl.bind_vertex_array(Some(vertex_array));
 
-            let vertex_shader_source = r#"const vec2 verts[3] = vec2[3](
-                vec2(0.5f, 1.0f),
+            let vertex_shader_source = r#"const vec2 verts[6] = vec2[6](
                 vec2(0.0f, 0.0f),
-                vec2(1.0f, 0.0f)
+                vec2(1.0f, 1.0f),
+                vec2(0.0f, 1.0f),
+
+                vec2(0.0f, 0.0f),
+                vec2(1.0f, 0.0f),
+                vec2(1.0f, 1.0f)
             );
             in vec2 offset;
             in vec2 offset2;
             out vec2 vert;
             void main() {
-                vert = verts[gl_VertexID % 3] + offset + offset2;
-                gl_Position = vec4(vert - 0.5, 0.0, 1.0);
+                vert = verts[gl_VertexID % 6] / 10.0 + offset + offset2;
+                gl_Position = vec4(vert, 0.0, 1.0);
             }"#;
             let fragment_shader_source = r#"precision mediump float;
             in vec2 vert;
@@ -243,6 +247,8 @@ pub struct QuadDrawCall {
     vbo: Buffer,
     vao: VertexArray,
     instance_vbo: Buffer,
+
+    lulz: oorandom::Rand32,
 }
 
 impl QuadDrawCall {
@@ -298,6 +304,8 @@ impl QuadDrawCall {
             gl.enable_vertex_attrib_array(offset2_attrib);
 
             gl.bind_vertex_array(None);
+
+            let lulz = oorandom::Rand32::new(314159);
             Self {
                 vbo,
                 vao,
@@ -305,6 +313,7 @@ impl QuadDrawCall {
                 sampler,
                 instance_vbo,
                 instances: vec![],
+                lulz,
             }
         }
     }
@@ -313,8 +322,18 @@ impl QuadDrawCall {
         self.instances.push(quad);
     }
 
+    pub fn add_random(&mut self) {
+        let x = self.lulz.rand_float() * 2.0 - 1.0;
+        let y = self.lulz.rand_float() * 2.0 - 1.0;
+        let quad = QuadData { offset: [x, y] };
+        self.instances.push(quad);
+    }
+
     /// Upload the array of instances to our VBO
-    unsafe fn upload_instances(&self, gl: &Context) {
+    unsafe fn upload_instances(&mut self, gl: &Context) {
+        // TODO: This is just for testing
+        self.add_random();
+
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
         // TODO: Invalidate buffer on change instead of refilling it all the time
         // TODO: Make instance data cast not suck
@@ -332,14 +351,14 @@ impl QuadDrawCall {
         gl.bind_buffer(glow::ARRAY_BUFFER, None);
     }
 
-    unsafe fn draw(&self, gl: &Context) {
+    unsafe fn draw(&mut self, gl: &Context) {
         self.upload_instances(gl);
         // bind texture
         // bind sampler
         // Use this when we figure out heckin' instancing
         //let num_vertices = self.instances.len() * 3;
         let num_instances = self.instances.len();
-        let num_vertices = 3;
+        let num_vertices = 6;
         //gl.draw_arrays(glow::TRIANGLES, 0, 3);
         gl.bind_vertex_array(Some(self.vao));
         //gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
@@ -377,9 +396,9 @@ impl QuadPipeline {
         }
     }
 
-    unsafe fn draw(&self, gl: &Context) {
+    unsafe fn draw(&mut self, gl: &Context) {
         gl.use_program(Some(self.program));
-        for dc in self.drawcalls.iter() {
+        for dc in self.drawcalls.iter_mut() {
             dc.draw(gl);
         }
     }
@@ -470,7 +489,7 @@ fn run_glutin() {
         };
 
         // GL SETUP
-        let ctx = GlContext::new(gl, shader_version);
+        let mut ctx = GlContext::new(gl, shader_version);
 
         // EVENT LOOP
         {
