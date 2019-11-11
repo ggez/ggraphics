@@ -97,11 +97,6 @@ impl GlContext {
         }
     }
 
-    unsafe fn create_texture(gl: &glow::Context) -> Texture {
-        let texture = gl.create_texture().unwrap();
-        texture
-    }
-
     fn new(gl: glow::Context, shader_version: &str) -> Self {
         // GL SETUP
         unsafe {
@@ -122,15 +117,23 @@ impl GlContext {
             in vec2 offset;
             in vec2 offset2;
             out vec2 vert;
+            out vec2 tex_coord;
             void main() {
                 vert = verts[gl_VertexID % 6] / 10.0 + offset + offset2;
+                tex_coord = verts[gl_VertexID];
                 gl_Position = vec4(vert, 0.0, 1.0);
             }"#;
             let fragment_shader_source = r#"precision mediump float;
             in vec2 vert;
+            in vec2 tex_coord;
+            uniform sampler2D tex;
+
             out vec4 color;
+
             void main() {
-                color = vec4(vert, 0.5, 1.0);
+                //color = vec4(vert, 0.5, 1.0);
+                color = vec4(texture(tex, tex_coord).rgb, 1.0);
+                //color = vec4(tex_coord, 0.5, 0.5) + vec4(texture(tex, tex_coord).rgb, 0.0);
             }"#;
             let program = Self::create_program(
                 &gl,
@@ -140,43 +143,17 @@ impl GlContext {
             );
 
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             let mut pipeline = QuadPipeline::new(program);
-            let texture = Self::create_texture(&gl);
-            let mut drawcall = QuadDrawCall::new(&gl, texture, SamplerSpec {}, &pipeline.program);
-            drawcall.add(QuadData {
-                offset: [-0.5, 0.5],
-            });
-            drawcall.add(QuadData { offset: [0.5, 0.5] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData {
-                offset: [0.0, -0.5],
-            });
-            /*
-            drawcall.add(QuadData {
-                offset: [-0.5, 0.5],
-            });
-            drawcall.add(QuadData {
-                offset: [-0.5, 0.5],
-            });
-            drawcall.add(QuadData { offset: [0.5, 0.5] });
-            drawcall.add(QuadData { offset: [0.5, 0.5] });
-            drawcall.add(QuadData { offset: [0.5, 0.5] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.0] });
-            drawcall.add(QuadData { offset: [0.0, 0.5] });
-            drawcall.add(QuadData { offset: [0.0, 0.5] });
-            drawcall.add(QuadData { offset: [0.0, 0.5] });
-            drawcall.add(QuadData {
-                offset: [0.0, -0.5],
-            });
-            drawcall.add(QuadData {
-                offset: [0.0, -0.5],
-            });
-            drawcall.add(QuadData {
-                offset: [0.0, -0.5],
-            });
-            */
+            let texture = {
+                let image_bytes = include_bytes!("data/blue.png");
+                let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
+                let (w, h) = image_rgba.dimensions();
+                let image_rgba_bytes = image_rgba.into_raw();
+                make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
+            };
+            let drawcall = QuadDrawCall::new(&gl, texture, SamplerSpec {}, &pipeline.program);
             pipeline.drawcalls.push(drawcall);
             GlContext {
                 gl,
@@ -199,9 +176,10 @@ impl GlContext {
 /// The EASY option is to Arc them, have the GlContext keep a hold of them, and
 /// have a method like Rendy's `Factory::maintain()` to clean 'em up once in a while.
 /// Note that Arc::try_unwrap() is a thing we can use for that.
-pub unsafe fn make_texture(gl: Context, rgba: &[u8], width: usize, height: usize) -> Texture {
+pub unsafe fn make_texture(gl: &Context, rgba: &[u8], width: usize, height: usize) -> Texture {
     assert_eq!(width * height * 4, rgba.len());
     let t = gl.create_texture().unwrap();
+    gl.active_texture(glow::TEXTURE0);
     gl.bind_texture(glow::TEXTURE_2D, Some(t));
     // TODO: Unfuck number conversions.  Thanks, C.
     gl.tex_image_2d(
@@ -309,6 +287,8 @@ impl QuadDrawCall {
                 2,
                 glow::FLOAT,
                 false,
+                // Can we jsut say the stride of this guy is 0, since
+                // we never actually use it (yet)?
                 //(2 * mem::size_of::<f32>()) as i32,
                 0,
                 0,
@@ -330,6 +310,9 @@ impl QuadDrawCall {
             );
             gl.vertex_attrib_divisor(offset2_attrib, 1);
             gl.enable_vertex_attrib_array(offset2_attrib);
+
+            let tex_location = gl.get_uniform_location(*shader, "tex").unwrap();
+            gl.uniform_1_i32(Some(tex_location), 0);
 
             gl.bind_vertex_array(None);
 
@@ -392,6 +375,9 @@ impl QuadDrawCall {
         let num_vertices = 6;
         //gl.draw_arrays(glow::TRIANGLES, 0, 3);
         gl.bind_vertex_array(Some(self.vao));
+        // TODO: is this active_texture() call necessary?
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
         //gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
         gl.draw_arrays_instanced(
             glow::TRIANGLES,
@@ -497,10 +483,6 @@ fn run_wasm() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_glutin() {
-    let image_bytes = include_bytes!("data/rust_logo.png");
-    let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
-    let (w, h) = image_rgba.dimensions();
-    let image_rgba_bytes = image_rgba.into_raw();
     // CONTEXT CREATION
     unsafe {
         // Create a context from a glutin window on non-wasm32 targets
