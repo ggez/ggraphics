@@ -109,7 +109,9 @@ impl GlContext {
 
     /// Log OpenGL errors as possible.
     /// TODO: make it only happen in debug mode.
+    /// ALSO TODO: Figure out why this panics on wasm
     fn register_debug_callback(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
         unsafe {
             self.gl
                 .debug_message_callback(|source, typ, id, severity, message| {
