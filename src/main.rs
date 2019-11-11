@@ -18,6 +18,7 @@ type GlProgram = <Context as glow::HasContext>::Program;
 type GlVertexArray = <Context as glow::HasContext>::VertexArray;
 type GlFramebuffer = <Context as glow::HasContext>::Framebuffer;
 type GlBuffer = <Context as glow::HasContext>::Buffer;
+type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -83,6 +84,7 @@ impl GlContext {
                 gl: Rc::new(gl),
                 pipelines: vec![],
             };
+            s.register_debug_callback();
             let shader = Shader::new(
                 &s,
                 vertex_shader_source,
@@ -102,6 +104,20 @@ impl GlContext {
             pipeline.drawcalls.push(drawcall);
             s.pipelines.push(pipeline);
             s
+        }
+    }
+
+    /// Log OpenGL errors as possible.
+    /// TODO: make it only happen in debug mode.
+    fn register_debug_callback(&self) {
+        unsafe {
+            self.gl
+                .debug_message_callback(|source, typ, id, severity, message| {
+                    debug!(
+                        "GL error type {} id {} from {} severity {}: {}",
+                        typ, id, source, severity, message
+                    );
+                });
         }
     }
 
@@ -271,6 +287,7 @@ pub struct QuadDrawCall {
     vbo: GlBuffer,
     vao: GlVertexArray,
     instance_vbo: GlBuffer,
+    texture_location: GlUniformLocation,
 
     lulz: oorandom::Rand32,
 }
@@ -334,8 +351,8 @@ impl QuadDrawCall {
             gl.vertex_attrib_divisor(offset2_attrib, 1);
             gl.enable_vertex_attrib_array(offset2_attrib);
 
-            let tex_location = gl.get_uniform_location(shader.program, "tex").unwrap();
-            gl.uniform_1_i32(Some(tex_location), 0);
+            let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
+            //gl.uniform_1_i32(Some(texture_location), 0);
 
             gl.bind_vertex_array(None);
 
@@ -347,6 +364,7 @@ impl QuadDrawCall {
                 texture,
                 _sampler: sampler,
                 instance_vbo,
+                texture_location,
                 instances: vec![],
                 lulz,
             }
@@ -401,6 +419,7 @@ impl QuadDrawCall {
         // TODO: is this active_texture() call necessary?
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(self.texture.tex));
+        gl.uniform_1_i32(Some(self.texture_location), 0);
         gl.draw_arrays_instanced(
             glow::TRIANGLES,
             0,
@@ -490,6 +509,7 @@ fn run_wasm() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_glutin() {
+    pretty_env_logger::init();
     // CONTEXT CREATION
     unsafe {
         // Create a context from a glutin window on non-wasm32 targets
@@ -511,9 +531,11 @@ fn run_glutin() {
             });
             (context, el, windowed_context, "#version 410")
         };
+        trace!("Window created");
 
         // GL SETUP
         let mut ctx = GlContext::new(gl, shader_version);
+        trace!("GL context created");
 
         // EVENT LOOP
         {
@@ -528,7 +550,6 @@ fn run_glutin() {
                         return;
                     }
                     Event::EventsCleared => {
-                        info!("EventsCleared");
                         windowed_context.window().request_redraw();
                     }
                     Event::WindowEvent { ref event, .. } => match event {
@@ -538,7 +559,7 @@ fn run_glutin() {
                             windowed_context.resize(logical_size.to_physical(dpi_factor));
                         }
                         WindowEvent::RedrawRequested => {
-                            info!("WindowEvent::RedrawRequested");
+                            //info!("WindowEvent::RedrawRequested");
                             ctx.gl.clear(glow::COLOR_BUFFER_BIT);
                             //ctx.gl.draw_arrays(glow::TRIANGLES, 0, 3);
                             for pipeline in ctx.pipelines.iter_mut() {
