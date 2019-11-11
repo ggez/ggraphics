@@ -115,10 +115,30 @@ impl GlContext {
         unsafe {
             self.gl
                 .debug_message_callback(|source, typ, id, severity, message| {
-                    debug!(
-                        "GL error type {} id {} from {} severity {}: {}",
-                        typ, id, source, severity, message
-                    );
+                    // The ordering of severities is basically awful, best to
+                    // not even try and just match them manually.
+                    match severity {
+                        glow::DEBUG_SEVERITY_HIGH => {
+                            error!(
+                                "GL error type {} id {} from {}: {}",
+                                typ, id, source, message
+                            );
+                        }
+                        glow::DEBUG_SEVERITY_MEDIUM => {
+                            warn!(
+                                "GL error type {} id {} from {}: {}",
+                                typ, id, source, message
+                            );
+                        }
+                        glow::DEBUG_SEVERITY_LOW => {
+                            info!(
+                                "GL error type {} id {} from {}: {}",
+                                typ, id, source, message
+                            );
+                        }
+                        glow::DEBUG_SEVERITY_NOTIFICATION => (),
+                        _ => (),
+                    }
                 });
         }
     }
