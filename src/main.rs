@@ -38,64 +38,10 @@ type Rc<T> = std::rc::Rc<T>;
 /// at compile time, rather than trying to use generics or such.
 pub struct GlContext {
     gl: Rc<glow::Context>,
-    program: GlProgram,
-    pipeline: QuadPipeline,
-}
-
-impl Drop for GlContext {
-    fn drop(&mut self) {
-        unsafe {
-            self.pipeline.dispose(&self.gl);
-            self.gl.delete_program(self.program);
-        }
-    }
+    pipelines: Vec<QuadPipeline>,
 }
 
 impl GlContext {
-    fn create_program(
-        gl: &glow::Context,
-        vertex_src: &str,
-        fragment_src: &str,
-        shader_version: &str,
-    ) -> GlProgram {
-        let shader_sources = [
-            (glow::VERTEX_SHADER, vertex_src),
-            (glow::FRAGMENT_SHADER, fragment_src),
-        ];
-
-        unsafe {
-            let program = gl.create_program().expect("Cannot create program");
-            let mut shaders = Vec::with_capacity(shader_sources.len());
-
-            for (shader_type, shader_source) in shader_sources.iter() {
-                let shader = gl
-                    .create_shader(*shader_type)
-                    .expect("Cannot create shader");
-                gl.shader_source(shader, &format!("{}\n{}", shader_version, shader_source));
-                gl.compile_shader(shader);
-                if !gl.get_shader_compile_status(shader) {
-                    panic!(gl.get_shader_info_log(shader));
-                }
-                gl.attach_shader(program, shader);
-                shaders.push(shader);
-            }
-
-            gl.link_program(program);
-            if !gl.get_program_link_status(program) {
-                panic!(gl.get_program_info_log(program));
-            }
-
-            for shader in shaders {
-                gl.detach_shader(program, shader);
-                gl.delete_shader(shader);
-            }
-            // TODO:
-            // By default only one output so this isn't necessary
-            // glBindFragDataLocation(shaderProgram, 0, "outColor");
-            program
-        }
-    }
-
     fn new(gl: glow::Context, shader_version: &str) -> Self {
         // GL SETUP
         unsafe {
@@ -129,22 +75,21 @@ impl GlContext {
                 color = vec4(texture(tex, tex_coord).rgb, 1.0);
                 //color = vec4(tex_coord, 0.5, 0.5) + vec4(texture(tex, tex_coord).rgb, 0.0);
             }"#;
-            let program = Self::create_program(
-                &gl,
-                vertex_shader_source,
-                fragment_shader_source,
-                shader_version,
-            );
 
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-            let mut pipeline = QuadPipeline::new(program);
             let mut s = GlContext {
                 gl: Rc::new(gl),
-                program,
-                pipeline,
+                pipelines: vec![],
             };
+            let shader = Shader::new(
+                &s,
+                vertex_shader_source,
+                fragment_shader_source,
+                shader_version,
+            );
+            let mut pipeline = QuadPipeline::new(&s, shader);
             let texture = {
                 let image_bytes = include_bytes!("data/blue.png");
                 let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
@@ -153,43 +98,16 @@ impl GlContext {
                 //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
                 Texture::new(&s, &image_rgba_bytes, w as usize, h as usize)
             };
-            let drawcall = QuadDrawCall::new(&s, texture, SamplerSpec {}, &s.pipeline.program);
-            s.pipeline.drawcalls.push(drawcall);
+            let drawcall = QuadDrawCall::new(&s, texture, SamplerSpec {}, &pipeline.shader);
+            pipeline.drawcalls.push(drawcall);
+            s.pipelines.push(pipeline);
             s
         }
     }
 
-    pub fn get_sampler(&mut self, spec: &SamplerSpec) -> Sampler {
+    pub fn get_sampler(&mut self, _spec: &SamplerSpec) -> Sampler {
         unimplemented!()
     }
-}
-
-/// TODO: We REALLY need to think about how to store and dispose of textures,
-/// given that we need the Context to delete them.  This means that implementing
-/// Drop isn't enough,
-///
-/// The EASY option is to Arc them, have the GlContext keep a hold of them, and
-/// have a method like Rendy's `Factory::maintain()` to clean 'em up once in a while.
-/// Note that Arc::try_unwrap() is a thing we can use for that.
-pub unsafe fn make_texture(gl: &Context, rgba: &[u8], width: usize, height: usize) -> GlTexture {
-    assert_eq!(width * height * 4, rgba.len());
-    let t = gl.create_texture().unwrap();
-    gl.active_texture(glow::TEXTURE0);
-    gl.bind_texture(glow::TEXTURE_2D, Some(t));
-    // TODO: Unfuck number conversions.  Thanks, C.
-    gl.tex_image_2d(
-        glow::TEXTURE_2D,    // Texture target
-        0,                   // mipmap level
-        glow::RGBA as i32,   // format to store the texture in
-        width as i32,        // width
-        height as i32,       // height
-        0,                   // border, must always be 0, lulz
-        glow::RGBA,          // format to load the texture from
-        glow::UNSIGNED_BYTE, // Type of each color element
-        Some(rgba),          // Actual data
-    );
-    gl.bind_texture(glow::TEXTURE_2D, None);
-    t
 }
 
 pub struct Texture {
@@ -229,6 +147,69 @@ impl Texture {
             Self {
                 ctx: ctx.gl.clone(),
                 tex: t,
+            }
+        }
+    }
+}
+
+pub struct Shader {
+    ctx: Rc<glow::Context>,
+    program: GlProgram,
+}
+
+impl Drop for Shader {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_program(self.program);
+        }
+    }
+}
+
+impl Shader {
+    pub fn new(
+        ctx: &GlContext,
+        vertex_src: &str,
+        fragment_src: &str,
+        shader_version: &str,
+    ) -> Shader {
+        let gl = &*ctx.gl;
+        let shader_sources = [
+            (glow::VERTEX_SHADER, vertex_src),
+            (glow::FRAGMENT_SHADER, fragment_src),
+        ];
+
+        unsafe {
+            let program = gl.create_program().expect("Cannot create program");
+            let mut shaders = Vec::with_capacity(shader_sources.len());
+
+            for (shader_type, shader_source) in shader_sources.iter() {
+                let shader = gl
+                    .create_shader(*shader_type)
+                    .expect("Cannot create shader");
+                gl.shader_source(shader, &format!("{}\n{}", shader_version, shader_source));
+                gl.compile_shader(shader);
+                if !gl.get_shader_compile_status(shader) {
+                    panic!(gl.get_shader_info_log(shader));
+                }
+                gl.attach_shader(program, shader);
+                shaders.push(shader);
+            }
+
+            gl.link_program(program);
+            if !gl.get_program_link_status(program) {
+                panic!(gl.get_program_info_log(program));
+            }
+
+            for shader in shaders {
+                gl.detach_shader(program, shader);
+                gl.delete_shader(shader);
+            }
+            // TODO:
+            // By default only one output so this isn't necessary
+            // glBindFragDataLocation(shaderProgram, 0, "outColor");
+            Shader {
+                ctx: ctx.gl.clone(),
+                program,
             }
         }
     }
@@ -286,7 +267,7 @@ pub struct SamplerSpec {}
 pub struct QuadDrawCall {
     ctx: Rc<glow::Context>,
     texture: Texture,
-    sampler: SamplerSpec,
+    _sampler: SamplerSpec,
     instances: Vec<QuadData>,
     vbo: GlBuffer,
     vao: GlVertexArray,
@@ -306,7 +287,7 @@ impl Drop for QuadDrawCall {
 }
 
 impl QuadDrawCall {
-    fn new(ctx: &GlContext, texture: Texture, sampler: SamplerSpec, shader: &GlProgram) -> Self {
+    fn new(ctx: &GlContext, texture: Texture, sampler: SamplerSpec, shader: &Shader) -> Self {
         let gl = &*ctx.gl;
         // TODO: Audit unsafe
         unsafe {
@@ -323,7 +304,8 @@ impl QuadDrawCall {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
             // TODO: https://github.com/grovesNL/glow/issues/54
-            let offset_attrib = u32::try_from(gl.get_attrib_location(*shader, "offset")).unwrap();
+            let offset_attrib =
+                u32::try_from(gl.get_attrib_location(shader.program, "offset")).unwrap();
             gl.vertex_attrib_pointer_f32(
                 offset_attrib,
                 2,
@@ -340,7 +322,8 @@ impl QuadDrawCall {
             // Now create another VBO containing per-instance data
             let instance_vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
-            let offset2_attrib = u32::try_from(gl.get_attrib_location(*shader, "offset2")).unwrap();
+            let offset2_attrib =
+                u32::try_from(gl.get_attrib_location(shader.program, "offset2")).unwrap();
             gl.vertex_attrib_pointer_f32(
                 offset2_attrib,
                 2,
@@ -352,7 +335,7 @@ impl QuadDrawCall {
             gl.vertex_attrib_divisor(offset2_attrib, 1);
             gl.enable_vertex_attrib_array(offset2_attrib);
 
-            let tex_location = gl.get_uniform_location(*shader, "tex").unwrap();
+            let tex_location = gl.get_uniform_location(shader.program, "tex").unwrap();
             gl.uniform_1_i32(Some(tex_location), 0);
 
             gl.bind_vertex_array(None);
@@ -363,7 +346,7 @@ impl QuadDrawCall {
                 vbo,
                 vao,
                 texture,
-                sampler,
+                _sampler: sampler,
                 instance_vbo,
                 instances: vec![],
                 lulz,
@@ -426,44 +409,28 @@ impl QuadDrawCall {
             num_instances as i32,
         );
     }
-
-    /// Destroy this thing's resources using the given gl context.
-    /// Must be the same gl context that created this, natch.
-    /// Horrible things will happen if it isn't.
-    ///
-    /// TODO: Arc textures?
-    /// TODO: Debug ID?
-    unsafe fn dispose(&mut self, gl: &Context) {
-        gl.delete_buffer(self.vbo);
-        gl.delete_vertex_array(self.vao);
-    }
 }
 
 pub struct QuadPipeline {
+    //ctx: Rc<glow::Context>,
     drawcalls: Vec<QuadDrawCall>,
-    program: GlProgram,
+    shader: Shader,
 }
 
 impl QuadPipeline {
-    fn new(program: GlProgram) -> Self {
+    fn new(_ctx: &GlContext, shader: Shader) -> Self {
         Self {
+            //ctx: ctx.gl.clone(),
             drawcalls: vec![],
-            program,
+            shader,
         }
     }
 
     unsafe fn draw(&mut self, gl: &Context) {
-        gl.use_program(Some(self.program));
+        gl.use_program(Some(self.shader.program));
         for dc in self.drawcalls.iter_mut() {
             dc.draw(gl);
         }
-    }
-
-    unsafe fn dispose(&mut self, gl: &Context) {
-        for mut dc in self.drawcalls.drain(..) {
-            dc.dispose(gl);
-        }
-        gl.delete_program(self.program);
     }
 }
 
@@ -509,7 +476,9 @@ fn run_wasm() {
         render_loop.run(move |running: &mut bool| {
             if let Some(ictx) = &mut ctx {
                 ictx.gl.clear(glow::COLOR_BUFFER_BIT);
-                ictx.pipeline.draw(&ictx.gl);
+                for pipeline in ictx.pipelines.iter_mut() {
+                    pipeline.draw(&ictx.gl);
+                }
             }
 
             if !*running {
@@ -573,7 +542,9 @@ fn run_glutin() {
                             info!("WindowEvent::RedrawRequested");
                             ctx.gl.clear(glow::COLOR_BUFFER_BIT);
                             //ctx.gl.draw_arrays(glow::TRIANGLES, 0, 3);
-                            ctx.pipeline.draw(&ctx.gl);
+                            for pipeline in ctx.pipelines.iter_mut() {
+                                pipeline.draw(&ctx.gl);
+                            }
                             windowed_context.swap_buffers().unwrap();
                         }
                         WindowEvent::CloseRequested => {
