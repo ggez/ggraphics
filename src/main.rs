@@ -12,12 +12,12 @@ use log::*;
 
 // Shortcuts for various OpenGL types.
 
-type Texture = <Context as glow::HasContext>::Texture;
+type GlTexture = <Context as glow::HasContext>::Texture;
 type Sampler = <Context as glow::HasContext>::Sampler;
-type Program = <Context as glow::HasContext>::Program;
-type VertexArray = <Context as glow::HasContext>::VertexArray;
-type Framebuffer = <Context as glow::HasContext>::Framebuffer;
-type Buffer = <Context as glow::HasContext>::Buffer;
+type GlProgram = <Context as glow::HasContext>::Program;
+type GlVertexArray = <Context as glow::HasContext>::VertexArray;
+type GlFramebuffer = <Context as glow::HasContext>::Framebuffer;
+type GlBuffer = <Context as glow::HasContext>::Buffer;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -27,13 +27,18 @@ pub fn wasm_main() {
     main();
 }
 
+/// TODO: Figure out what to do with this, and whether it can work on wasm.
+/// For now though, Rc is fine.
+type Rc<T> = std::rc::Rc<T>;
+//type Ref<T> = Arc<T>;
+
 /// A type that contains all the STUFF we need for displaying graphics
 /// and handling events on both desktop and web.
 /// Anything it contains is specialized to the correct type via cfg flags
 /// at compile time, rather than trying to use generics or such.
-struct GlContext {
-    gl: glow::Context,
-    program: Program,
+pub struct GlContext {
+    gl: Rc<glow::Context>,
+    program: GlProgram,
     pipeline: QuadPipeline,
 }
 
@@ -52,7 +57,7 @@ impl GlContext {
         vertex_src: &str,
         fragment_src: &str,
         shader_version: &str,
-    ) -> Program {
+    ) -> GlProgram {
         let shader_sources = [
             (glow::VERTEX_SHADER, vertex_src),
             (glow::FRAGMENT_SHADER, fragment_src),
@@ -135,20 +140,22 @@ impl GlContext {
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             let mut pipeline = QuadPipeline::new(program);
+            let mut s = GlContext {
+                gl: Rc::new(gl),
+                program,
+                pipeline,
+            };
             let texture = {
                 let image_bytes = include_bytes!("data/blue.png");
                 let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
                 let (w, h) = image_rgba.dimensions();
                 let image_rgba_bytes = image_rgba.into_raw();
-                make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
+                //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
+                Texture::new(&s, &image_rgba_bytes, w as usize, h as usize)
             };
-            let drawcall = QuadDrawCall::new(&gl, texture, SamplerSpec {}, &pipeline.program);
-            pipeline.drawcalls.push(drawcall);
-            GlContext {
-                gl,
-                program,
-                pipeline,
-            }
+            let drawcall = QuadDrawCall::new(&s, texture, SamplerSpec {}, &s.pipeline.program);
+            s.pipeline.drawcalls.push(drawcall);
+            s
         }
     }
 
@@ -164,7 +171,7 @@ impl GlContext {
 /// The EASY option is to Arc them, have the GlContext keep a hold of them, and
 /// have a method like Rendy's `Factory::maintain()` to clean 'em up once in a while.
 /// Note that Arc::try_unwrap() is a thing we can use for that.
-pub unsafe fn make_texture(gl: &Context, rgba: &[u8], width: usize, height: usize) -> Texture {
+pub unsafe fn make_texture(gl: &Context, rgba: &[u8], width: usize, height: usize) -> GlTexture {
     assert_eq!(width * height * 4, rgba.len());
     let t = gl.create_texture().unwrap();
     gl.active_texture(glow::TEXTURE0);
@@ -183,6 +190,48 @@ pub unsafe fn make_texture(gl: &Context, rgba: &[u8], width: usize, height: usiz
     );
     gl.bind_texture(glow::TEXTURE_2D, None);
     t
+}
+
+pub struct Texture {
+    ctx: Rc<glow::Context>,
+    tex: GlTexture,
+}
+
+impl Drop for Texture {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_texture(self.tex);
+        }
+    }
+}
+
+impl Texture {
+    pub fn new(ctx: &GlContext, rgba: &[u8], width: usize, height: usize) -> Self {
+        assert_eq!(width * height * 4, rgba.len());
+        let gl = &*ctx.gl;
+        unsafe {
+            let t = gl.create_texture().unwrap();
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(t));
+            // TODO: Unfuck number conversions.  Thanks, C.
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,    // Texture target
+                0,                   // mipmap level
+                glow::RGBA as i32,   // format to store the texture in
+                width as i32,        // width
+                height as i32,       // height
+                0,                   // border, must always be 0, lulz
+                glow::RGBA,          // format to load the texture from
+                glow::UNSIGNED_BYTE, // Type of each color element
+                Some(rgba),          // Actual data
+            );
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            Self {
+                ctx: ctx.gl.clone(),
+                tex: t,
+            }
+        }
+    }
 }
 
 /// Input to an instance
@@ -235,18 +284,30 @@ pub struct QuadData {
 pub struct SamplerSpec {}
 
 pub struct QuadDrawCall {
+    ctx: Rc<glow::Context>,
     texture: Texture,
     sampler: SamplerSpec,
     instances: Vec<QuadData>,
-    vbo: Buffer,
-    vao: VertexArray,
-    instance_vbo: Buffer,
+    vbo: GlBuffer,
+    vao: GlVertexArray,
+    instance_vbo: GlBuffer,
 
     lulz: oorandom::Rand32,
 }
 
+impl Drop for QuadDrawCall {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_vertex_array(self.vao);
+            self.ctx.delete_buffer(self.vbo);
+            self.ctx.delete_buffer(self.instance_vbo);
+        }
+    }
+}
+
 impl QuadDrawCall {
-    fn new(gl: &Context, texture: Texture, sampler: SamplerSpec, shader: &Program) -> Self {
+    fn new(ctx: &GlContext, texture: Texture, sampler: SamplerSpec, shader: &GlProgram) -> Self {
+        let gl = &*ctx.gl;
         // TODO: Audit unsafe
         unsafe {
             let vao = gl.create_vertex_array().unwrap();
@@ -298,6 +359,7 @@ impl QuadDrawCall {
 
             let lulz = oorandom::Rand32::new(314159);
             Self {
+                ctx: ctx.gl.clone(),
                 vbo,
                 vao,
                 texture,
@@ -356,7 +418,7 @@ impl QuadDrawCall {
         // Bind texture
         // TODO: is this active_texture() call necessary?
         gl.active_texture(glow::TEXTURE0);
-        gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
+        gl.bind_texture(glow::TEXTURE_2D, Some(self.texture.tex));
         gl.draw_arrays_instanced(
             glow::TRIANGLES,
             0,
@@ -372,7 +434,6 @@ impl QuadDrawCall {
     /// TODO: Arc textures?
     /// TODO: Debug ID?
     unsafe fn dispose(&mut self, gl: &Context) {
-        gl.delete_texture(self.texture);
         gl.delete_buffer(self.vbo);
         gl.delete_vertex_array(self.vao);
     }
@@ -380,11 +441,11 @@ impl QuadDrawCall {
 
 pub struct QuadPipeline {
     drawcalls: Vec<QuadDrawCall>,
-    program: Program,
+    program: GlProgram,
 }
 
 impl QuadPipeline {
-    fn new(program: Program) -> Self {
+    fn new(program: GlProgram) -> Self {
         Self {
             drawcalls: vec![],
             program,
@@ -410,7 +471,7 @@ impl QuadPipeline {
 /// We're not actually intending to reproduce Rendy's Graph type here.
 /// This may eventually feed into a bounce buffer or such though.
 pub struct RenderPass {
-    _output_framebuffer: Framebuffer,
+    _output_framebuffer: GlFramebuffer,
     _pipelines: Vec<QuadPipeline>,
 }
 
