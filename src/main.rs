@@ -1,11 +1,7 @@
 // Suggested logging level for debugging:
 // env RUST_LOG=info cargo run
 //
-// Next up: Vertex array objects and buffer objects.
-// VAO's basically describe what the array looks like.
-// VBO's contain the data.
-// See the Rust gamedev discord for more, around Nov 6 2019
-// 16:00 EST
+// Next up: Textures
 
 use std::convert::TryFrom;
 use std::mem;
@@ -38,7 +34,6 @@ pub fn wasm_main() {
 struct GlContext {
     gl: glow::Context,
     program: Program,
-    vertex_array: VertexArray,
     pipeline: QuadPipeline,
 }
 
@@ -47,7 +42,6 @@ impl Drop for GlContext {
         unsafe {
             self.pipeline.dispose(&self.gl);
             self.gl.delete_program(self.program);
-            self.gl.delete_vertex_array(self.vertex_array);
         }
     }
 }
@@ -100,11 +94,6 @@ impl GlContext {
     fn new(gl: glow::Context, shader_version: &str) -> Self {
         // GL SETUP
         unsafe {
-            let vertex_array = gl
-                .create_vertex_array()
-                .expect("Cannot create vertex array");
-            gl.bind_vertex_array(Some(vertex_array));
-
             let vertex_shader_source = r#"const vec2 verts[6] = vec2[6](
                 vec2(0.0f, 0.0f),
                 vec2(1.0f, 1.0f),
@@ -158,7 +147,6 @@ impl GlContext {
             GlContext {
                 gl,
                 program,
-                vertex_array,
                 pipeline,
             }
         }
@@ -264,19 +252,12 @@ impl QuadDrawCall {
             let vao = gl.create_vertex_array().unwrap();
             gl.bind_vertex_array(Some(vao));
 
-            // TODO: Double-check that this bind sticks to the VAO,
-            // though currently it doesn't matter 'cause we re-bind it so that
-            // we can fill it with instance data on draw
             // Okay, it looks like which VBO is bound IS part of the VAO data,
             // and it is stored *when glVertexAttribPointer is called*.
             // According to https://open.gl/drawing at least.
             // And, that stuff I THINK is stored IN THE ATTRIBUTE INFO,
             // in this case `offset_attrib`, and then THAT gets attached
             // to the VAO by enable_vertex_attrib_array()
-            //
-            // Wait, no, maybe it has to be done after the VAO is bound,
-            // and the attribs are part of that?  The same link
-            // says that, but says it AFTER it talks about the VBO, so
             let vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
@@ -293,10 +274,9 @@ impl QuadDrawCall {
                 0,
                 0,
             );
-            // TODO: Double-check if 3 is correct
             gl.enable_vertex_attrib_array(offset_attrib);
 
-            // Now create a VBO containing per-instance data
+            // Now create another VBO containing per-instance data
             let instance_vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
             let offset2_attrib = u32::try_from(gl.get_attrib_location(*shader, "offset2")).unwrap();
@@ -333,7 +313,7 @@ impl QuadDrawCall {
         self.instances.push(quad);
     }
 
-    pub fn add_random(&mut self) {
+    fn add_random(&mut self) {
         let x = self.lulz.rand_float() * 2.0 - 1.0;
         let y = self.lulz.rand_float() * 2.0 - 1.0;
         let quad = QuadData { offset: [x, y] };
@@ -355,7 +335,8 @@ impl QuadDrawCall {
 
         // TODO: Make usage sensible
         // Dummy data for per-vertex attributes
-        // TODO: This is a little awful, is there a better way?
+        // TODO: This is a little awful since we send a big pile of
+        // data to the GPU which we never use, is there a better way?
         // Can we just give it an empty or empty-ish array?
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, empty_slice, glow::STREAM_DRAW);
 
@@ -367,18 +348,15 @@ impl QuadDrawCall {
 
     unsafe fn draw(&mut self, gl: &Context) {
         self.upload_instances(gl);
-        // bind texture
         // bind sampler
-        // Use this when we figure out heckin' instancing
-        //let num_vertices = self.instances.len() * 3;
+        // Bind VAO
         let num_instances = self.instances.len();
         let num_vertices = 6;
-        //gl.draw_arrays(glow::TRIANGLES, 0, 3);
         gl.bind_vertex_array(Some(self.vao));
+        // Bind texture
         // TODO: is this active_texture() call necessary?
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(self.texture));
-        //gl.draw_arrays(glow::TRIANGLES, 0, num_vertices as i32);
         gl.draw_arrays_instanced(
             glow::TRIANGLES,
             0,
