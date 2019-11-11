@@ -131,17 +131,16 @@ impl Texture {
             let t = gl.create_texture().unwrap();
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(t));
-            // TODO: Unfuck number conversions.  Thanks, C.
             gl.tex_image_2d(
-                glow::TEXTURE_2D,    // Texture target
-                0,                   // mipmap level
-                glow::RGBA as i32,   // format to store the texture in
-                width as i32,        // width
-                height as i32,       // height
-                0,                   // border, must always be 0, lulz
-                glow::RGBA,          // format to load the texture from
-                glow::UNSIGNED_BYTE, // Type of each color element
-                Some(rgba),          // Actual data
+                glow::TEXTURE_2D,                   // Texture target
+                0,                                  // mipmap level
+                i32::try_from(glow::RGBA).unwrap(), // format to store the texture in (can't fail)
+                i32::try_from(width).unwrap(),      // width
+                i32::try_from(height).unwrap(),     // height
+                0,                                  // border, must always be 0, lulz
+                glow::RGBA,                         // format to load the texture from
+                glow::UNSIGNED_BYTE,                // Type of each color element
+                Some(rgba),                         // Actual data
             );
             gl.bind_texture(glow::TEXTURE_2D, None);
             Self {
