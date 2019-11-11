@@ -11,6 +11,7 @@ use std::convert::TryFrom;
 use std::mem;
 
 use glow::*;
+use image;
 use log::*;
 
 // Shortcuts for various OpenGL types.
@@ -189,6 +190,33 @@ impl GlContext {
     pub fn get_sampler(&mut self, spec: &SamplerSpec) -> Sampler {
         unimplemented!()
     }
+}
+
+/// TODO: We REALLY need to think about how to store and dispose of textures,
+/// given that we need the Context to delete them.  This means that implementing
+/// Drop isn't enough,
+///
+/// The EASY option is to Arc them, have the GlContext keep a hold of them, and
+/// have a method like Rendy's `Factory::maintain()` to clean 'em up once in a while.
+/// Note that Arc::try_unwrap() is a thing we can use for that.
+pub unsafe fn make_texture(gl: Context, rgba: &[u8], width: usize, height: usize) -> Texture {
+    assert_eq!(width * height * 4, rgba.len());
+    let t = gl.create_texture().unwrap();
+    gl.bind_texture(glow::TEXTURE_2D, Some(t));
+    // TODO: Unfuck number conversions.  Thanks, C.
+    gl.tex_image_2d(
+        glow::TEXTURE_2D,    // Texture target
+        0,                   // mipmap level
+        glow::RGBA as i32,   // format to store the texture in
+        width as i32,        // width
+        height as i32,       // height
+        0,                   // border, must always be 0, lulz
+        glow::RGBA,          // format to load the texture from
+        glow::UNSIGNED_BYTE, // Type of each color element
+        Some(rgba),          // Actual data
+    );
+    gl.bind_texture(glow::TEXTURE_2D, None);
+    t
 }
 
 /// Input to an instance
@@ -469,6 +497,10 @@ fn run_wasm() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_glutin() {
+    let image_bytes = include_bytes!("data/rust_logo.png");
+    let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
+    let (w, h) = image_rgba.dimensions();
+    let image_rgba_bytes = image_rgba.into_raw();
     // CONTEXT CREATION
     unsafe {
         // Create a context from a glutin window on non-wasm32 targets
