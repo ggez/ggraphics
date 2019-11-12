@@ -169,6 +169,16 @@ impl Texture {
             let t = gl.create_texture().unwrap();
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(t));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
             gl.tex_image_2d(
                 glow::TEXTURE_2D,                   // Texture target
                 0,                                  // mipmap level
@@ -180,6 +190,7 @@ impl Texture {
                 glow::UNSIGNED_BYTE,                // Type of each color element
                 Some(rgba),                         // Actual data
             );
+
             gl.bind_texture(glow::TEXTURE_2D, None);
             Self {
                 ctx: ctx.gl.clone(),
