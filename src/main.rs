@@ -71,12 +71,14 @@ impl GlContext {
                 vec2(1.0f, 0.0f)
             );
 
-            in vec2 vertex_offset;
+            // Gotta actually use this dummy value or else it'll get
+            // optimized out and we'll fail to look it up later.
+            in vec2 vertex_dummy;
             in vec2 model_offset;
             out vec2 vert;
             out vec2 tex_coord;
             void main() {
-                vert = verts[gl_VertexID % 6] / 8.0 + vertex_offset + model_offset;
+                vert = verts[gl_VertexID % 6] / 8.0 + vertex_dummy + model_offset;
                 tex_coord = uvs[gl_VertexID];
                 gl_Position = vec4(vert, 0.0, 1.0);
             }"#;
@@ -417,6 +419,10 @@ pub struct QuadDrawCall {
     vao: GlVertexArray,
     instance_vbo: GlBuffer,
     texture_location: GlUniformLocation,
+    /// Whether or not the instances have changed
+    /// compared to what the VBO contains, so we can
+    /// only upload to the VBO on changes
+    dirty: bool,
 
     lulz: oorandom::Rand32,
 }
@@ -451,15 +457,15 @@ impl QuadDrawCall {
 
             // TODO: https://github.com/grovesNL/glow/issues/54
             let offset_attrib =
-                u32::try_from(gl.get_attrib_location(shader.program, "vertex_offset")).unwrap();
+                u32::try_from(gl.get_attrib_location(shader.program, "vertex_dummy")).unwrap();
             gl.vertex_attrib_pointer_f32(
                 offset_attrib,
                 2,
                 glow::FLOAT,
                 false,
-                // Can we jsut say the stride of this guy is 0, since
-                // we never actually use it (yet)?
-                //(2 * mem::size_of::<f32>()) as i32,
+                // We can just say the stride of this guy is 0, since
+                // we never actually use it (yet).  That lets us use a
+                // widdle bitty awway for this.
                 0,
                 0,
             );
@@ -510,12 +516,14 @@ impl QuadDrawCall {
                 instance_vbo,
                 texture_location,
                 instances: vec![],
+                dirty: true,
                 lulz,
             }
         }
     }
 
     pub fn add(&mut self, quad: QuadData) {
+        self.dirty = true;
         self.instances.push(quad);
     }
 
@@ -523,14 +531,11 @@ impl QuadDrawCall {
         let x = self.lulz.rand_float() * 2.0 - 1.0;
         let y = self.lulz.rand_float() * 2.0 - 1.0;
         let quad = QuadData { offset: [x, y] };
-        self.instances.push(quad);
+        self.add(quad);
     }
 
     /// Upload the array of instances to our VBO
     unsafe fn upload_instances(&mut self, gl: &Context) {
-        // TODO: This is just for testing
-        self.add_random();
-
         // TODO: Invalidate buffer on change instead of refilling it all the time
         // TODO: Make instance data pointer cast not suck
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
@@ -541,10 +546,13 @@ impl QuadDrawCall {
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instance_vbo));
         gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
         gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        self.dirty = false;
     }
 
     unsafe fn draw(&mut self, gl: &Context) {
-        self.upload_instances(gl);
+        if self.dirty {
+            self.upload_instances(gl);
+        }
         // Bind VAO
         let num_instances = self.instances.len();
         let num_vertices = 6;
@@ -557,9 +565,13 @@ impl QuadDrawCall {
         gl.uniform_1_i32(Some(self.texture_location), 0);
 
         // bind sampler
-        // TODO: This is FUCKING WHACKO.  Do I bind a sampler
-        // to GL_TEXTURE0, or to self.texture_location , or to
-        // self.texture.tex ???
+        // This is FUCKING WHACKO.  I set the active texture
+        // unit to glow::TEXTURE0 , which sets it to texture
+        // unit 0, then I bind the sampler to 0, which sets it
+        // to texture unit 0.  I think.  You have to dig into
+        // the ARB extension RFC to figure this out 'cause it isn't
+        // documented anywhere else I can find it.
+        // Thanks, Khronos.
         gl.bind_sampler(0, Some(self.sampler));
         gl.draw_arrays_instanced(
             glow::TRIANGLES,
@@ -567,6 +579,9 @@ impl QuadDrawCall {
             num_vertices as i32,
             num_instances as i32,
         );
+
+        // TODO: This is just for testing
+        self.add_random();
     }
 }
 
