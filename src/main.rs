@@ -630,47 +630,45 @@ pub struct RenderPass {
 
 #[cfg(target_arch = "wasm32")]
 fn run_wasm() {
-    unsafe {
-        // CONTEXT CREATION
-        let (gl, render_loop, shader_version) = {
-            use wasm_bindgen::JsCast;
-            let canvas = web_sys::window()
-                .unwrap()
-                .document()
-                .unwrap()
-                .get_element_by_id("canvas")
-                .unwrap()
-                .dyn_into::<web_sys::HtmlCanvasElement>()
-                .unwrap();
-            let webgl2_context = canvas
-                .get_context("webgl2")
-                .unwrap()
-                .unwrap()
-                .dyn_into::<web_sys::WebGl2RenderingContext>()
-                .unwrap();
-            (
-                glow::Context::from_webgl2_context(webgl2_context),
-                glow::RenderLoop::from_request_animation_frame(),
-                "#version 300 es",
-            )
-        };
+    // CONTEXT CREATION
+    let (gl, render_loop, shader_version) = {
+        use wasm_bindgen::JsCast;
+        let canvas = web_sys::window()
+            .unwrap()
+            .document()
+            .unwrap()
+            .get_element_by_id("canvas")
+            .unwrap()
+            .dyn_into::<web_sys::HtmlCanvasElement>()
+            .unwrap();
+        let webgl2_context = canvas
+            .get_context("webgl2")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<web_sys::WebGl2RenderingContext>()
+            .unwrap();
+        (
+            glow::Context::from_webgl2_context(webgl2_context),
+            glow::RenderLoop::from_request_animation_frame(),
+            "#version 300 es",
+        )
+    };
 
-        // GL SETUP
-        let mut ctx = Some(GlContext::new(gl, shader_version));
+    // GL SETUP
+    let mut ctx = Some(GlContext::new(gl, shader_version));
 
-        // RENDER LOOP
-        render_loop.run(move |running: &mut bool| {
-            if let Some(ictx) = &mut ctx {
-                ictx.update();
-                ictx.draw();
-            }
+    // RENDER LOOP
+    render_loop.run(move |running: &mut bool| {
+        if let Some(ictx) = &mut ctx {
+            ictx.update();
+            ictx.draw();
+        }
 
-            if !*running {
-                // Drop context, deleting its contents.
-                ctx = None;
-            }
-        });
-    }
+        if !*running {
+            // Drop context, deleting its contents.
+            ctx = None;
+        }
+    });
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -707,6 +705,10 @@ fn run_glutin() {
         {
             use glutin::event::{Event, WindowEvent};
             use glutin::event_loop::ControlFlow;
+            use std::time::Instant;
+
+            let mut frames = 0;
+            let mut loop_time = Instant::now();
 
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::Poll;
@@ -716,7 +718,17 @@ fn run_glutin() {
                         return;
                     }
                     Event::EventsCleared => {
+                        frames += 1;
                         ctx.update();
+                        const FRAMES: u32 = 100;
+                        if frames % FRAMES == 0 {
+                            let num_objects = ctx.pipelines[0].drawcalls[0].instances.len();
+                            let now = Instant::now();
+                            let dt = now - loop_time;
+                            let fps = FRAMES as f64 / dt.as_secs_f64();
+                            loop_time = now;
+                            info!("{} objects, {:.03} fps", num_objects, fps);
+                        }
                         windowed_context.window().request_redraw();
                     }
                     Event::WindowEvent { ref event, .. } => match event {
