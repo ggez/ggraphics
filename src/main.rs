@@ -88,10 +88,9 @@ impl GlContext {
             out vec4 color;
 
             void main() {
-                //color = vec4(vert, 0.5, 1.0);
-                //color = vec4(texture(tex, tex_coord).rgb, 1.0);
+                // Useful for looking at UV values
+                //color = vec4(tex_coord, 0.5, 1.0);
                 color = texture(tex, tex_coord);
-                //color = vec4(tex_coord, 0.5, 0.5) + vec4(texture(tex, tex_coord).rgb, 0.0);
             }"#;
 
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
@@ -118,7 +117,8 @@ impl GlContext {
                 //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
                 Texture::new(&s, &image_rgba_bytes, w as usize, h as usize)
             };
-            let drawcall = QuadDrawCall::new(&s, texture, SamplerSpec::default(), &pipeline.shader);
+            let drawcall =
+                QuadDrawCall::new(&mut s, texture, SamplerSpec::default(), &pipeline.shader);
             pipeline.drawcalls.push(drawcall);
             s.pipelines.push(pipeline);
             s
@@ -411,7 +411,7 @@ impl Default for SamplerSpec {
 pub struct QuadDrawCall {
     ctx: Rc<glow::Context>,
     texture: Texture,
-    _sampler: SamplerSpec,
+    sampler: GlSampler,
     instances: Vec<QuadData>,
     vbo: GlBuffer,
     vao: GlVertexArray,
@@ -432,7 +432,8 @@ impl Drop for QuadDrawCall {
 }
 
 impl QuadDrawCall {
-    fn new(ctx: &GlContext, texture: Texture, sampler: SamplerSpec, shader: &Shader) -> Self {
+    fn new(ctx: &mut GlContext, texture: Texture, sampler: SamplerSpec, shader: &Shader) -> Self {
+        let sampler = ctx.get_sampler(&sampler);
         let gl = &*ctx.gl;
         // TODO: Audit unsafe
         unsafe {
@@ -482,6 +483,7 @@ impl QuadDrawCall {
 
             let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
             //gl.uniform_1_i32(Some(texture_location), 0);
+            //let sampler = ctx.get_sampler(&sampler);
 
             gl.bind_vertex_array(None);
 
@@ -491,7 +493,7 @@ impl QuadDrawCall {
                 vbo,
                 vao,
                 texture,
-                _sampler: sampler,
+                sampler,
                 instance_vbo,
                 texture_location,
                 instances: vec![],
@@ -549,6 +551,10 @@ impl QuadDrawCall {
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(self.texture.tex));
         gl.uniform_1_i32(Some(self.texture_location), 0);
+        // TODO: This is FUCKING WHACKO.  Do I bind a sampler
+        // to GL_TEXTURE0, or to self.texture_location , or to
+        // self.texture.tex ???
+        gl.bind_sampler(0, Some(self.sampler));
         gl.draw_arrays_instanced(
             glow::TRIANGLES,
             0,
