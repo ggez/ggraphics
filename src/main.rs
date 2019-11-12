@@ -3,6 +3,7 @@
 //
 // Next up: Textures
 
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem;
 
@@ -13,7 +14,7 @@ use log::*;
 // Shortcuts for various OpenGL types.
 
 type GlTexture = <Context as glow::HasContext>::Texture;
-type Sampler = <Context as glow::HasContext>::Sampler;
+type GlSampler = <Context as glow::HasContext>::Sampler;
 type GlProgram = <Context as glow::HasContext>::Program;
 type GlVertexArray = <Context as glow::HasContext>::VertexArray;
 type GlFramebuffer = <Context as glow::HasContext>::Framebuffer;
@@ -40,6 +41,11 @@ type Rc<T> = std::rc::Rc<T>;
 pub struct GlContext {
     gl: Rc<glow::Context>,
     pipelines: Vec<QuadPipeline>,
+    /// Samplers are cached and managed entirely by the GlContext.
+    /// You usually only need a few of them so there's no point freeing
+    /// them separately, you just ask for the one you want and it gives
+    /// it to you.
+    samplers: HashMap<SamplerSpec, GlSampler>,
 }
 
 impl GlContext {
@@ -94,6 +100,7 @@ impl GlContext {
             let mut s = GlContext {
                 gl: Rc::new(gl),
                 pipelines: vec![],
+                samplers: HashMap::new(),
             };
             s.register_debug_callback();
             let shader = Shader::new(
@@ -111,7 +118,7 @@ impl GlContext {
                 //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
                 Texture::new(&s, &image_rgba_bytes, w as usize, h as usize)
             };
-            let drawcall = QuadDrawCall::new(&s, texture, SamplerSpec {}, &pipeline.shader);
+            let drawcall = QuadDrawCall::new(&s, texture, SamplerSpec::default(), &pipeline.shader);
             pipeline.drawcalls.push(drawcall);
             s.pipelines.push(pipeline);
             s
@@ -154,8 +161,26 @@ impl GlContext {
         }
     }
 
-    pub fn get_sampler(&mut self, _spec: &SamplerSpec) -> Sampler {
-        unimplemented!()
+    pub fn get_sampler(&mut self, spec: &SamplerSpec) -> GlSampler {
+        let gl = &*self.gl;
+        // TODO: Audit unsafe
+        *self.samplers.entry(*spec).or_insert_with(|| unsafe {
+            let sampler = gl.create_sampler().unwrap();
+            gl.sampler_parameter_i32(
+                sampler,
+                glow::TEXTURE_MIN_FILTER,
+                spec.min_filter.to_gl() as i32,
+            );
+            gl.sampler_parameter_i32(
+                sampler,
+                glow::TEXTURE_MAG_FILTER,
+                spec.mag_filter.to_gl() as i32,
+            );
+            gl.sampler_parameter_i32(sampler, glow::TEXTURE_WRAP_S, spec.wrap.to_gl() as i32);
+            gl.sampler_parameter_i32(sampler, glow::TEXTURE_WRAP_T, spec.wrap.to_gl() as i32);
+            // TODO: Compare mode?  Maybe.
+            sampler
+        })
     }
 }
 
@@ -318,10 +343,70 @@ pub struct QuadData {
     offset: [f32; 2],
 }
 
+/// Filter modes a sampler may have.
+///
+/// TODO: Fill this out as necessary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FilterMode {
+    Nearest,
+    Linear,
+}
+
+impl FilterMode {
+    /// Turns the filter mode into the appropriate OpenGL enum
+    fn to_gl(self) -> u32 {
+        match self {
+            FilterMode::Nearest => glow::NEAREST,
+            FilterMode::Linear => glow::LINEAR,
+        }
+    }
+}
+
+/// Wrap modes a sampler may have.
+///
+/// TODO: Fill this out as necessary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WrapMode {
+    Clamp,
+    Repeat,
+}
+
+impl WrapMode {
+    /// Turns the wrap mode into the appropriate OpenGL enum
+    fn to_gl(self) -> u32 {
+        match self {
+            WrapMode::Clamp => glow::CLAMP_TO_EDGE,
+            WrapMode::Repeat => glow::REPEAT,
+        }
+    }
+}
+
 /// A description of a sampler.  We cache the actual
 /// samplers as needed in the GlContext.
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-pub struct SamplerSpec {}
+///
+/// TODO: Fill this out as necessary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SamplerSpec {
+    min_filter: FilterMode,
+    mag_filter: FilterMode,
+    wrap: WrapMode,
+}
+
+impl SamplerSpec {
+    pub fn new(min: FilterMode, mag: FilterMode, wrap: WrapMode) -> Self {
+        Self {
+            min_filter: min,
+            mag_filter: mag,
+            wrap,
+        }
+    }
+}
+
+impl Default for SamplerSpec {
+    fn default() -> Self {
+        Self::new(FilterMode::Nearest, FilterMode::Nearest, WrapMode::Repeat)
+    }
+}
 
 pub struct QuadDrawCall {
     ctx: Rc<glow::Context>,
