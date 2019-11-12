@@ -71,12 +71,12 @@ impl GlContext {
                 vec2(1.0f, 0.0f)
             );
 
-            in vec2 offset;
-            in vec2 offset2;
+            in vec2 vertex_offset;
+            in vec2 model_offset;
             out vec2 vert;
             out vec2 tex_coord;
             void main() {
-                vert = verts[gl_VertexID % 6] / 8.0 + offset + offset2;
+                vert = verts[gl_VertexID % 6] / 8.0 + vertex_offset + model_offset;
                 tex_coord = uvs[gl_VertexID];
                 gl_Position = vec4(vert, 0.0, 1.0);
             }"#;
@@ -451,7 +451,7 @@ impl QuadDrawCall {
 
             // TODO: https://github.com/grovesNL/glow/issues/54
             let offset_attrib =
-                u32::try_from(gl.get_attrib_location(shader.program, "offset")).unwrap();
+                u32::try_from(gl.get_attrib_location(shader.program, "vertex_offset")).unwrap();
             gl.vertex_attrib_pointer_f32(
                 offset_attrib,
                 2,
@@ -465,21 +465,34 @@ impl QuadDrawCall {
             );
             gl.enable_vertex_attrib_array(offset_attrib);
 
+            // We DO need a buffer of per-vertex attributes, WebGL gets snippy
+            // if we just give it per-instance attributes and say "yeah each
+            // vertex just has nothing attached to it".  Which is exactly what
+            // we want for quad drawing, alas.
+            //
+            // But we can make a buffer that just contains one vec2(0,0) for each vertex
+            // and give it that, and that seems just fine.
+            // And we only need enough vertices to draw one quad and never have to alter it.
+            // We could reuse the same buffer for all QuadDrawCall's, tbh, but that seems
+            // a bit overkill.
+            let empty_slice: &[u8] = &[0; 8 * 6];
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, empty_slice, glow::STREAM_DRAW);
+
             // Now create another VBO containing per-instance data
             let instance_vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
-            let offset2_attrib =
-                u32::try_from(gl.get_attrib_location(shader.program, "offset2")).unwrap();
+            let model_offset_attrib =
+                u32::try_from(gl.get_attrib_location(shader.program, "model_offset")).unwrap();
             gl.vertex_attrib_pointer_f32(
-                offset2_attrib,
+                model_offset_attrib,
                 2,
                 glow::FLOAT,
                 false,
                 (2 * mem::size_of::<f32>()) as i32,
                 0,
             );
-            gl.vertex_attrib_divisor(offset2_attrib, 1);
-            gl.enable_vertex_attrib_array(offset2_attrib);
+            gl.vertex_attrib_divisor(model_offset_attrib, 1);
+            gl.enable_vertex_attrib_array(model_offset_attrib);
 
             let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
             //gl.uniform_1_i32(Some(texture_location), 0);
@@ -518,39 +531,32 @@ impl QuadDrawCall {
         // TODO: This is just for testing
         self.add_random();
 
-        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
         // TODO: Invalidate buffer on change instead of refilling it all the time
-        // TODO: Make instance data cast not suck
+        // TODO: Make instance data pointer cast not suck
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
         let bytes_ptr = self.instances.as_ptr() as *const u8;
-        let empty_slice = &vec![0; self.instances.len() * 8 * 6];
-        let bytes_slice2 = std::slice::from_raw_parts(bytes_ptr, num_bytes);
-
-        // TODO: Make usage sensible
-        // Dummy data for per-vertex attributes
-        // TODO: This is a little awful since we send a big pile of
-        // data to the GPU which we never use, is there a better way?
-        // Can we just give it an empty or empty-ish array?
-        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, empty_slice, glow::STREAM_DRAW);
+        let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
 
         // Fill instance buffer
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instance_vbo));
-        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice2, glow::STREAM_DRAW);
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
         gl.bind_buffer(glow::ARRAY_BUFFER, None);
     }
 
     unsafe fn draw(&mut self, gl: &Context) {
         self.upload_instances(gl);
-        // bind sampler
         // Bind VAO
         let num_instances = self.instances.len();
         let num_vertices = 6;
         gl.bind_vertex_array(Some(self.vao));
+
         // Bind texture
         // TODO: is this active_texture() call necessary?
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(self.texture.tex));
         gl.uniform_1_i32(Some(self.texture_location), 0);
+
+        // bind sampler
         // TODO: This is FUCKING WHACKO.  Do I bind a sampler
         // to GL_TEXTURE0, or to self.texture_location , or to
         // self.texture.tex ???
