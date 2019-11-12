@@ -55,13 +55,23 @@ impl GlContext {
                 vec2(1.0f, 0.0f),
                 vec2(1.0f, 1.0f)
             );
+            const vec2 uvs[6] = vec2[6](
+                vec2(0.0f, 1.0f),
+                vec2(1.0f, 0.0f),
+                vec2(0.0f, 0.0f),
+
+                vec2(0.0f, 1.0f),
+                vec2(1.0f, 1.0f),
+                vec2(1.0f, 0.0f)
+            );
+
             in vec2 offset;
             in vec2 offset2;
             out vec2 vert;
             out vec2 tex_coord;
             void main() {
-                vert = verts[gl_VertexID % 6] / 10.0 + offset + offset2;
-                tex_coord = verts[gl_VertexID];
+                vert = verts[gl_VertexID % 6] / 8.0 + offset + offset2;
+                tex_coord = uvs[gl_VertexID];
                 gl_Position = vec4(vert, 0.0, 1.0);
             }"#;
             let fragment_shader_source = r#"precision mediump float;
@@ -73,7 +83,8 @@ impl GlContext {
 
             void main() {
                 //color = vec4(vert, 0.5, 1.0);
-                color = vec4(texture(tex, tex_coord).rgb, 1.0);
+                //color = vec4(texture(tex, tex_coord).rgb, 1.0);
+                color = texture(tex, tex_coord);
                 //color = vec4(tex_coord, 0.5, 0.5) + vec4(texture(tex, tex_coord).rgb, 0.0);
             }"#;
 
@@ -93,7 +104,7 @@ impl GlContext {
             );
             let mut pipeline = QuadPipeline::new(&s, shader);
             let texture = {
-                let image_bytes = include_bytes!("data/blue.png");
+                let image_bytes = include_bytes!("data/rust_logo.png");
                 let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
                 let (w, h) = image_rgba.dimensions();
                 let image_rgba_bytes = image_rgba.into_raw();
