@@ -184,6 +184,24 @@ impl GlContext {
             sampler
         })
     }
+
+    fn draw(&mut self) {
+        // This will be safe if pipeline.draw() is
+        unsafe {
+            self.gl.clear(glow::COLOR_BUFFER_BIT);
+            for pipeline in self.pipelines.iter_mut() {
+                pipeline.draw(&self.gl);
+            }
+        }
+    }
+
+    fn update(&mut self) {
+        for pipeline in self.pipelines.iter_mut() {
+            for drawcall in pipeline.drawcalls.iter_mut() {
+                drawcall.add_random();
+            }
+        }
+    }
 }
 
 pub struct Texture {
@@ -203,20 +221,13 @@ impl Texture {
     pub fn new(ctx: &GlContext, rgba: &[u8], width: usize, height: usize) -> Self {
         assert_eq!(width * height * 4, rgba.len());
         let gl = &*ctx.gl;
+        // Unsafety: This verifies size of user input, checks resource
+        // creation, and does no raw pointer-manipulation-y things outside
+        // of that.
         unsafe {
             let t = gl.create_texture().unwrap();
             gl.active_texture(glow::TEXTURE0);
             gl.bind_texture(glow::TEXTURE_2D, Some(t));
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::NEAREST as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::NEAREST as i32,
-            );
             gl.tex_image_2d(
                 glow::TEXTURE_2D,                   // Texture target
                 0,                                  // mipmap level
@@ -264,6 +275,7 @@ impl Shader {
             (glow::FRAGMENT_SHADER, fragment_src),
         ];
 
+        // TODO: Audit unsafe
         unsafe {
             let program = gl.create_program().expect("Cannot create program");
             let mut shaders = Vec::with_capacity(shader_sources.len());
@@ -433,6 +445,8 @@ impl Drop for QuadDrawCall {
             self.ctx.delete_vertex_array(self.vao);
             self.ctx.delete_buffer(self.vbo);
             self.ctx.delete_buffer(self.instance_vbo);
+            // Don't need to drop the sampler, it's owned by
+            // the `GlContext`.
         }
     }
 }
@@ -501,8 +515,6 @@ impl QuadDrawCall {
             gl.enable_vertex_attrib_array(model_offset_attrib);
 
             let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
-            //gl.uniform_1_i32(Some(texture_location), 0);
-            //let sampler = ctx.get_sampler(&sampler);
 
             gl.bind_vertex_array(None);
 
@@ -536,8 +548,8 @@ impl QuadDrawCall {
 
     /// Upload the array of instances to our VBO
     unsafe fn upload_instances(&mut self, gl: &Context) {
-        // TODO: Invalidate buffer on change instead of refilling it all the time
-        // TODO: Make instance data pointer cast not suck
+        // TODO: Make instance data pointer cast not suck,
+        // audit unsafe
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
         let bytes_ptr = self.instances.as_ptr() as *const u8;
         let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
@@ -649,10 +661,8 @@ fn run_wasm() {
         // RENDER LOOP
         render_loop.run(move |running: &mut bool| {
             if let Some(ictx) = &mut ctx {
-                ictx.gl.clear(glow::COLOR_BUFFER_BIT);
-                for pipeline in ictx.pipelines.iter_mut() {
-                    pipeline.draw(&ictx.gl);
-                }
+                ictx.update();
+                ictx.draw();
             }
 
             if !*running {
@@ -706,6 +716,7 @@ fn run_glutin() {
                         return;
                     }
                     Event::EventsCleared => {
+                        ctx.update();
                         windowed_context.window().request_redraw();
                     }
                     Event::WindowEvent { ref event, .. } => match event {
@@ -715,12 +726,7 @@ fn run_glutin() {
                             windowed_context.resize(logical_size.to_physical(dpi_factor));
                         }
                         WindowEvent::RedrawRequested => {
-                            //info!("WindowEvent::RedrawRequested");
-                            ctx.gl.clear(glow::COLOR_BUFFER_BIT);
-                            //ctx.gl.draw_arrays(glow::TRIANGLES, 0, 3);
-                            for pipeline in ctx.pipelines.iter_mut() {
-                                pipeline.draw(&ctx.gl);
-                            }
+                            ctx.draw();
                             windowed_context.swap_buffers().unwrap();
                         }
                         WindowEvent::CloseRequested => {
