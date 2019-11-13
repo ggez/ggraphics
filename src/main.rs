@@ -201,7 +201,7 @@ impl GlContext {
         // We max out at 16 ms per frame; this method of measurement
         // is pretty imprecise and there will be jitter, but it should
         // be okay for order-of-magnitude.
-        if frametime.as_secs_f64() < 0.16 {
+        if frametime.as_secs_f64() < 0.016 {
             for pipeline in self.pipelines.iter_mut() {
                 for drawcall in pipeline.drawcalls.iter_mut() {
                     for _ in 0..10 {
