@@ -204,7 +204,9 @@ impl GlContext {
         if frametime.as_secs_f64() < 0.16 {
             for pipeline in self.pipelines.iter_mut() {
                 for drawcall in pipeline.drawcalls.iter_mut() {
-                    drawcall.add_random();
+                    for _ in 0..10 {
+                        drawcall.add_random();
+                    }
                 }
             }
         }
@@ -733,7 +735,7 @@ fn run_glutin() {
                         frames += 1;
                         const FRAMES: u32 = 100;
                         if frames % FRAMES == 0 {
-                            let fps = FRAMES as f64 / dt.as_secs_f64();
+                            let fps = 1.0 / dt.as_secs_f64();
                             info!("{} objects, {:.03} fps", num_objects, fps);
                         }
                         windowed_context.window().request_redraw();
