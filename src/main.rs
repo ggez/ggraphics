@@ -72,10 +72,13 @@ impl GlContext {
                 vec2(1.0f, 0.0f)
             );
 
+            // TODO: We don't actually need layouts here, hmmm.
+            // Not sure how we want to define these.
+
             // Gotta actually use this dummy value or else it'll get
             // optimized out and we'll fail to look it up later.
-            in vec2 vertex_dummy;
-            in vec2 model_offset;
+            layout(location = 0) in vec2 vertex_dummy;
+            layout(location = 1) in vec2 model_offset;
             out vec2 vert;
             out vec2 tex_coord;
             void main() {
@@ -88,7 +91,7 @@ impl GlContext {
             in vec2 tex_coord;
             uniform sampler2D tex;
 
-            out vec4 color;
+            layout(location=0) out vec4 color;
 
             void main() {
                 // Useful for looking at UV values
@@ -209,6 +212,19 @@ impl GlContext {
             }
         }
         self.pipelines[0].drawcalls[0].instances.len()
+    }
+
+    /// Returns OpenGL version info.
+    /// Vendor, renderer, GL version, GLSL version
+    pub fn get_info(&self) -> (String, String, String, String) {
+        unsafe {
+            let vendor = self.gl.get_parameter_string(glow::VENDOR);
+            let rend = self.gl.get_parameter_string(glow::RENDERER);
+            let vers = self.gl.get_parameter_string(glow::VERSION);
+            let glsl_vers = self.gl.get_parameter_string(glow::SHADING_LANGUAGE_VERSION);
+
+            (vendor, rend, vers, glsl_vers)
+        }
     }
 }
 
@@ -522,6 +538,7 @@ impl QuadDrawCall {
             gl.vertex_attrib_divisor(model_offset_attrib, 1);
             gl.enable_vertex_attrib_array(model_offset_attrib);
 
+            // We can't define locations for uniforms, yet.
             let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
 
             gl.bind_vertex_array(None);
@@ -602,7 +619,6 @@ impl QuadDrawCall {
 }
 
 pub struct QuadPipeline {
-    //ctx: Rc<glow::Context>,
     drawcalls: Vec<QuadDrawCall>,
     shader: Shader,
 }
@@ -610,7 +626,6 @@ pub struct QuadPipeline {
 impl QuadPipeline {
     fn new(_ctx: &GlContext, shader: Shader) -> Self {
         Self {
-            //ctx: ctx.gl.clone(),
             drawcalls: vec![],
             shader,
         }
@@ -664,7 +679,9 @@ fn run_wasm() {
     // RENDER LOOP
     render_loop.run(move |running: &mut bool| {
         if let Some(ictx) = &mut ctx {
-            ictx.update();
+            // web-sys has no Instant so we just have
+            // to give it a dummy frame duration
+            ictx.update(Duration::from_millis(10));
             ictx.draw();
         }
 
@@ -706,7 +723,15 @@ fn run_glutin() {
 
         // GL SETUP
         let mut ctx = GlContext::new(gl, shader_version);
-        trace!("GL context created");
+        let (vend, rend, vers, shader_vers) = ctx.get_info();
+        info!(
+            "GL context created.
+  Vendor: {}
+  Renderer: {}
+  Version: {}
+  Shader version: {}",
+            vend, rend, vers, shader_vers
+        );
 
         // EVENT LOOP
         {
