@@ -129,10 +129,9 @@ impl GlContext {
     }
 
     /// Log OpenGL errors as possible.
-    /// TODO: make it only happen in debug mode.
-    /// ALSO TODO: Figure out why this panics on wasm
+    /// TODO: Figure out why this panics on wasm
     fn register_debug_callback(&self) {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
         unsafe {
             self.gl
                 .debug_message_callback(|source, typ, id, severity, message| {
@@ -181,7 +180,6 @@ impl GlContext {
             );
             gl.sampler_parameter_i32(sampler, glow::TEXTURE_WRAP_S, spec.wrap.to_gl() as i32);
             gl.sampler_parameter_i32(sampler, glow::TEXTURE_WRAP_T, spec.wrap.to_gl() as i32);
-            // TODO: Compare mode?  Maybe.
             sampler
         })
     }
@@ -558,8 +556,7 @@ impl QuadDrawCall {
 
     /// Upload the array of instances to our VBO
     unsafe fn upload_instances(&mut self, gl: &Context) {
-        // TODO: Make instance data pointer cast not suck,
-        // audit unsafe
+        // TODO: audit unsafe
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
         let bytes_ptr = self.instances.as_ptr() as *const u8;
         let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
@@ -690,8 +687,11 @@ fn run_glutin() {
                 .with_title("Hello triangle!")
                 .with_inner_size(glutin::dpi::LogicalSize::new(1024.0, 768.0));
             let windowed_context = glutin::ContextBuilder::new()
-                // TODO: Specific GL versions.
-                .with_gl(glutin::GlRequest::Latest)
+                //.with_gl(glutin::GlRequest::Latest)
+                .with_gl(glutin::GlRequest::GlThenGles {
+                    opengl_version: (4, 3),
+                    opengles_version: (3, 0),
+                })
                 .with_gl_profile(glutin::GlProfile::Core)
                 .with_vsync(true)
                 .build_windowed(wb, &el)
