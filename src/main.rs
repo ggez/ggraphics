@@ -113,7 +113,7 @@ impl GlContext {
             );
             let mut pipeline = QuadPipeline::new(&s, shader);
             let texture = {
-                let image_bytes = include_bytes!("data/rust_logo.png");
+                let image_bytes = include_bytes!("data/wabbit_alpha.png");
                 let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
                 let (w, h) = image_rgba.dimensions();
                 let image_rgba_bytes = image_rgba.into_raw();
@@ -204,7 +204,7 @@ impl GlContext {
         if frametime.as_secs_f64() < 0.017 {
             for pipeline in self.pipelines.iter_mut() {
                 for drawcall in pipeline.drawcalls.iter_mut() {
-                    for _ in 0..10 {
+                    for _ in 0..30 {
                         drawcall.add_random();
                     }
                 }
