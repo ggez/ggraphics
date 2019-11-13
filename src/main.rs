@@ -1,7 +1,7 @@
 // Suggested logging level for debugging:
 // env RUST_LOG=info cargo run
 //
-// Next up: Textures
+// Next up: Render passes
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -368,10 +368,6 @@ pub struct DrawParam {
 /// DrawParam gets turned into this, eventually.
 /// We have to be *quite particular* about layout since this gets
 /// fed straight to the shader.
-///
-/// TODO: Currently the shader doesn't use src or color though.
-/// TODO: Figure out correct alignment...
-//#[repr(C, align(16))]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
@@ -596,6 +592,7 @@ impl QuadDrawCall {
 
         // Bind texture
         // TODO: is this active_texture() call necessary?
+        // Will be if we ever do multi-texturing, I suppose.
         gl.active_texture(glow::TEXTURE0);
         gl.bind_texture(glow::TEXTURE_2D, Some(self.texture.tex));
         gl.uniform_1_i32(Some(self.texture_location), 0);
