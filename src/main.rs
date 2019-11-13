@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem;
+use std::time::{Duration, Instant};
 
 use glow::*;
 use image;
@@ -195,12 +196,19 @@ impl GlContext {
         }
     }
 
-    fn update(&mut self) {
-        for pipeline in self.pipelines.iter_mut() {
-            for drawcall in pipeline.drawcalls.iter_mut() {
-                drawcall.add_random();
+    fn update(&mut self, frametime: Duration) -> usize {
+        // This adds more quads as long as our frame doesn't take too long
+        // We max out at 16 ms per frame; this method of measurement
+        // is pretty imprecise and there will be jitter, but it should
+        // be okay for order-of-magnitude.
+        if frametime.as_secs_f64() < 0.16 {
+            for pipeline in self.pipelines.iter_mut() {
+                for drawcall in pipeline.drawcalls.iter_mut() {
+                    drawcall.add_random();
+                }
             }
         }
+        self.pipelines[0].drawcalls[0].instances.len()
     }
 }
 
@@ -705,7 +713,6 @@ fn run_glutin() {
         {
             use glutin::event::{Event, WindowEvent};
             use glutin::event_loop::ControlFlow;
-            use std::time::Instant;
 
             let mut frames = 0;
             let mut loop_time = Instant::now();
@@ -718,15 +725,15 @@ fn run_glutin() {
                         return;
                     }
                     Event::EventsCleared => {
+                        let now = Instant::now();
+                        let dt = now - loop_time;
+                        let num_objects = ctx.update(dt);
+                        loop_time = now;
+
                         frames += 1;
-                        ctx.update();
                         const FRAMES: u32 = 100;
                         if frames % FRAMES == 0 {
-                            let num_objects = ctx.pipelines[0].drawcalls[0].instances.len();
-                            let now = Instant::now();
-                            let dt = now - loop_time;
                             let fps = FRAMES as f64 / dt.as_secs_f64();
-                            loop_time = now;
                             info!("{} objects, {:.03} fps", num_objects, fps);
                         }
                         windowed_context.window().request_redraw();
