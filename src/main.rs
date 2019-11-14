@@ -8,6 +8,7 @@ use std::convert::TryFrom;
 use std::mem;
 use std::time::{Duration, Instant};
 
+use bytemuck;
 use glow::*;
 use image;
 use log::*;
@@ -377,6 +378,10 @@ pub struct QuadData {
     offset: [f32; 2],
 }
 
+unsafe impl bytemuck::Zeroable for QuadData {}
+
+unsafe impl bytemuck::Pod for QuadData {}
+
 /// Filter modes a sampler may have.
 ///
 /// TODO: Fill this out as necessary.
@@ -570,9 +575,13 @@ impl QuadDrawCall {
     /// Upload the array of instances to our VBO
     unsafe fn upload_instances(&mut self, gl: &Context) {
         // TODO: audit unsafe
+        // Use the `bytemuck` crate?
+        let bytes_slice: &[u8] = bytemuck::try_cast_slice(self.instances.as_slice()).unwrap();
+        /*
         let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
         let bytes_ptr = self.instances.as_ptr() as *const u8;
         let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
+        */
 
         // Fill instance buffer
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instance_vbo));
