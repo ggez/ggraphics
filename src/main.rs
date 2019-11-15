@@ -25,6 +25,7 @@ type GlSampler = <Context as glow::HasContext>::Sampler;
 type GlProgram = <Context as glow::HasContext>::Program;
 type GlVertexArray = <Context as glow::HasContext>::VertexArray;
 type GlFramebuffer = <Context as glow::HasContext>::Framebuffer;
+//type GlRenderbuffer = <Context as glow::HasContext>::Renderbuffer;
 type GlBuffer = <Context as glow::HasContext>::Buffer;
 type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
 
@@ -276,6 +277,32 @@ impl Texture {
                 ctx: ctx.gl.clone(),
                 tex: t,
             }
+        }
+    }
+
+    /// Make a new empty texture with the given format.  Note that reading from the texture
+    /// will give undefined results, hence why this is unsafe.
+    pub unsafe fn new_empty(ctx: &GlContext, format: u32, width: usize, height: usize) -> Self {
+        let gl = &*ctx.gl;
+        let t = gl.create_texture().unwrap();
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, Some(t));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,               // Texture target
+            0,                              // mipmap level
+            i32::try_from(format).unwrap(), // format to store the texture in (can't fail)
+            i32::try_from(width).unwrap(),  // width
+            i32::try_from(height).unwrap(), // height
+            0,                              // border, must always be 0, lulz
+            format,                         // format to load the texture from
+            glow::UNSIGNED_BYTE,            // Type of each color element
+            None,                           // Actual data
+        );
+
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        Self {
+            ctx: ctx.gl.clone(),
+            tex: t,
         }
     }
 }
@@ -648,8 +675,89 @@ impl QuadPipeline {
 /// We're not actually intending to reproduce Rendy's Graph type here.
 /// This may eventually feed into a bounce buffer or such though.
 pub struct RenderPass {
-    _output_framebuffer: GlFramebuffer,
-    _pipelines: Vec<QuadPipeline>,
+    ctx: Rc<glow::Context>,
+    output_framebuffer: GlFramebuffer,
+    output_texture: Texture,
+    /// This may be a texture or a render buffer, if we don't need to sample
+    /// from it we can use a render buffer.  For now, for simplicity, we use
+    /// a texture.
+    output_depthbuffer: Texture,
+    pipelines: Vec<QuadPipeline>,
+}
+
+impl RenderPass {
+    unsafe fn new(ctx: &GlContext, width: usize, height: usize) -> Self {
+        let gl = &*ctx.gl;
+        let t = Texture::new_empty(ctx, glow::RGBA, width, height);
+        // TODO: Is this the right format?
+        let depth = Texture::new_empty(ctx, glow::DEPTH_COMPONENT16, width, height);
+        let fb = gl.create_framebuffer().unwrap();
+        // Now we have our color texture, depth buffer and framebuffer, and we
+        // glue them all together.
+        {
+            gl.bind_texture(glow::TEXTURE_2D, Some(t.tex));
+            // We need to add filtering params to the texture, for Reasons.
+            // We might be able to use samplers instead, but not yet.
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+
+            gl.bind_texture(glow::TEXTURE_2D, Some(depth.tex));
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
+            gl.framebuffer_texture(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, Some(t.tex), 0);
+            gl.framebuffer_texture(
+                glow::FRAMEBUFFER,
+                glow::DEPTH_ATTACHMENT,
+                Some(depth.tex),
+                0,
+            );
+
+            // Set list of draw buffers
+            let draw_buffers = &[glow::COLOR_ATTACHMENT0];
+            gl.draw_buffers(draw_buffers);
+
+            // Verify results
+            if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
+                panic!("Framebuffer hecked up");
+            }
+
+            // Reset heckin bindings
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+
+        Self {
+            ctx: ctx.gl.clone(),
+            output_framebuffer: fb,
+            output_texture: t,
+            output_depthbuffer: depth,
+            pipelines: vec![],
+        }
+    }
+
+    unsafe fn draw(&mut self, gl: &Context) {
+        for dc in self.pipelines.iter_mut() {
+            dc.draw(gl);
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
