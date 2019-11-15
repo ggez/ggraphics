@@ -777,7 +777,13 @@ impl RenderPass {
             */
 
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
-            gl.framebuffer_texture(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, Some(t.tex), 0);
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(t.tex),
+                0,
+            );
             /*
             gl.framebuffer_renderbuffer(
                 glow::FRAMEBUFFER,
@@ -833,6 +839,10 @@ impl RenderPass {
 
 #[cfg(target_arch = "wasm32")]
 fn run_wasm() {
+    use console_error_panic_hook;
+    use web_sys;
+
+    console_error_panic_hook::set_once();
     // CONTEXT CREATION
     let (gl, render_loop, shader_version) = {
         use wasm_bindgen::JsCast;

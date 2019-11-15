@@ -35,4 +35,4 @@ glutin = "0.22.0-alpha3"
 glow = {version = "0.3.0-alpha3", default-features=false, features=["web-sys"]}
 web_sys = { version = "0.3", package = "web-sys", features=["console"] }
 wasm-bindgen = { version = "0.2" }
-
+console_error_panic_hook = "0.1"
