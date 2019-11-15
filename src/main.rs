@@ -788,6 +788,7 @@ impl RenderPass {
     }
 
     unsafe fn draw(&mut self, gl: &Context) {
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.output_framebuffer));
         for dc in self.pipelines.iter_mut() {
             dc.draw(gl);
         }
