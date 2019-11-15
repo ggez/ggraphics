@@ -535,7 +535,7 @@ where
         let x = rng.rand_float() * max_width;
         let y = rng.rand_float() * max_height;
         let offset = euclid::Vector3D::new(x, y, 0.0);
-        let transform = Transform3::create_scale(100.0, 100.0, 1.0).post_translate(offset);
+        let transform = Transform3::create_scale(10.0, 10.0, 1.0).post_translate(offset);
         let src = Rect::from(euclid::Size2D::new(100.0, 100.0));
         let color = [1.0, 0.0, 1.0, 1.0];
         let instance = QuadData {

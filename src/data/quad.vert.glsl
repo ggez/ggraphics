@@ -40,6 +40,6 @@ void main() {
     //uv = vec4(pos.x / 100.0, 1 - (pos.y / 100.0), 0, 0);
     //uv = vec4(vertex.x, 1 -vertex.y, 0.0, 0.0);
 
-    // TODO: Fix depth crap!
-    gl_Position = vertex * proj * view;
+    // TODO: Fix all transform crap, and also heckin' check depth!
+    gl_Position = vertex; // * proj * view;
 }
