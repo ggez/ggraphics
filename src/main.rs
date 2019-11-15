@@ -48,7 +48,7 @@ type Rc<T> = std::rc::Rc<T>;
 /// at compile time, rather than trying to use generics or such.
 pub struct GlContext {
     gl: Rc<glow::Context>,
-    pipelines: Vec<QuadPipeline>,
+    //pipelines: Vec<QuadPipeline>,
     passes: Vec<RenderPass>,
     /// Samplers are cached and managed entirely by the GlContext.
     /// You usually only need a few of them so there's no point freeing
@@ -112,7 +112,7 @@ impl GlContext {
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             let mut s = GlContext {
                 gl: Rc::new(gl),
-                pipelines: vec![],
+                //pipelines: vec![],
                 passes: vec![],
                 samplers: HashMap::new(),
             };
@@ -215,16 +215,21 @@ impl GlContext {
         // We max out at 17 ms per frame; this method of measurement
         // is pretty imprecise and there will be jitter, but it should
         // be okay for order-of-magnitude.
+        let mut total_instances = 0;
         if frametime.as_secs_f64() < 0.017 {
-            for pipeline in self.pipelines.iter_mut() {
-                for drawcall in pipeline.drawcalls.iter_mut() {
-                    for _ in 0..30 {
-                        drawcall.add_random();
+            for pass in self.passes.iter_mut() {
+                for pipeline in pass.pipelines.iter_mut() {
+                    for drawcall in pipeline.drawcalls.iter_mut() {
+                        for _ in 0..30 {
+                            drawcall.add_random();
+                        }
+                        total_instances += drawcall.instances.len();
                     }
                 }
             }
         }
-        self.pipelines[0].drawcalls[0].instances.len()
+        //self.passes[0].pipelines[0].drawcalls[0].instances.len()
+        total_instances
     }
 
     /// Returns OpenGL version info.
@@ -692,7 +697,7 @@ pub struct RenderPass {
     /// This may be a texture or a render buffer, if we don't need to sample
     /// from it we can use a render buffer.  For now, for simplicity, we use
     /// a texture.
-    output_depthbuffer: Texture,
+    output_depthbuffer: GlRenderbuffer,
     pipelines: Vec<QuadPipeline>,
 }
 
@@ -700,6 +705,7 @@ impl Drop for RenderPass {
     fn drop(&mut self) {
         unsafe {
             self.ctx.delete_framebuffer(self.output_framebuffer);
+            // viciously leak the depth buffer for now.  cruel!
         }
     }
 }
@@ -709,6 +715,7 @@ impl RenderPass {
         let gl = &*ctx.gl;
         let t = Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height);
         // TODO: Is this the right format?  Newp.  What is?
+        /*
         let depth = Texture::new_empty(
             ctx,
             glow::DEPTH_COMPONENT16,
@@ -716,6 +723,8 @@ impl RenderPass {
             width,
             height,
         );
+        */
+        let depth = gl.create_renderbuffer().unwrap();
         let fb = gl.create_framebuffer().unwrap();
         // Now we have our color texture, depth buffer and framebuffer, and we
         // glue them all together.
@@ -734,26 +743,26 @@ impl RenderPass {
                 glow::NEAREST as i32,
             );
 
-            gl.bind_texture(glow::TEXTURE_2D, Some(depth.tex));
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::NEAREST as i32,
+            /*
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
+            gl.renderbuffer_storage(
+                glow::RENDERBUFFER,
+                glow::DEPTH_COMPONENT,
+                width as i32,
+                height as i32,
             );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::NEAREST as i32,
-            );
+            */
 
             gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
             gl.framebuffer_texture(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, Some(t.tex), 0);
-            gl.framebuffer_texture(
+            /*
+            gl.framebuffer_renderbuffer(
                 glow::FRAMEBUFFER,
                 glow::DEPTH_ATTACHMENT,
-                Some(depth.tex),
-                0,
+                glow::RENDERBUFFER,
+                Some(depth),
             );
+            */
 
             // Set list of draw buffers
             let draw_buffers = &[glow::COLOR_ATTACHMENT0];
