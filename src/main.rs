@@ -55,13 +55,12 @@ pub struct GlContext {
     /// them separately, you just ask for the one you want and it gives
     /// it to you.
     samplers: HashMap<SamplerSpec, GlSampler>,
+    shader_version: String,
 }
 
 impl GlContext {
-    fn new(gl: glow::Context, shader_version: &str) -> Self {
-        // GL SETUP
-        unsafe {
-            let vertex_shader_source = r#"const vec2 verts[6] = vec2[6](
+    fn default_shader(ctx: &GlContext) -> Shader {
+        let vertex_shader_source = r#"const vec2 verts[6] = vec2[6](
                 vec2(0.0f, 0.0f),
                 vec2(1.0f, 1.0f),
                 vec2(0.0f, 1.0f),
@@ -94,7 +93,7 @@ impl GlContext {
                 tex_coord = uvs[gl_VertexID];
                 gl_Position = vec4(vert, 0.0, 1.0);
             }"#;
-            let fragment_shader_source = r#"precision mediump float;
+        let fragment_shader_source = r#"precision mediump float;
             in vec2 vert;
             in vec2 tex_coord;
             uniform sampler2D tex;
@@ -106,7 +105,17 @@ impl GlContext {
                 //color = vec4(tex_coord, 0.5, 1.0);
                 color = texture(tex, tex_coord);
             }"#;
+        Shader::new(
+            &ctx,
+            vertex_shader_source,
+            fragment_shader_source,
+            &ctx.shader_version,
+        )
+    }
 
+    fn new(gl: glow::Context, shader_version: &str) -> Self {
+        // GL SETUP
+        unsafe {
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
@@ -115,15 +124,11 @@ impl GlContext {
                 //pipelines: vec![],
                 passes: vec![],
                 samplers: HashMap::new(),
+                shader_version: shader_version.to_string(),
             };
             s.register_debug_callback();
-            let mut pass = RenderPass::new(&s, 800, 600);
-            let shader = Shader::new(
-                &s,
-                vertex_shader_source,
-                fragment_shader_source,
-                shader_version,
-            );
+            let mut pass = RenderPass::new(&mut s, 800, 600);
+            let shader = Self::default_shader(&s);
             let mut pipeline = QuadPipeline::new(&s, shader);
             let texture = {
                 let image_bytes = include_bytes!("data/wabbit_alpha.png");
@@ -131,7 +136,7 @@ impl GlContext {
                 let (w, h) = image_rgba.dimensions();
                 let image_rgba_bytes = image_rgba.into_raw();
                 //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
-                Texture::new(&s, &image_rgba_bytes, w as usize, h as usize)
+                Texture::new(&s, &image_rgba_bytes, w as usize, h as usize).into_shared()
             };
             let drawcall =
                 QuadDrawCall::new(&mut s, texture, SamplerSpec::default(), &pipeline.shader);
@@ -228,7 +233,7 @@ impl GlContext {
                 }
             }
         }
-        //self.passes[0].pipelines[0].drawcalls[0].instances.len()
+        self.passes[0].pipelines[0].drawcalls[0].add_random();
         total_instances
     }
 
@@ -246,10 +251,16 @@ impl GlContext {
     }
 }
 
+/// TODO: This is actually not safe to Clone, we'd have to Rc it.
+/// Which is fine, but then inconvenient for other things maybe.
+/// Think about it.
+#[derive(Debug)]
 pub struct Texture {
     ctx: Rc<glow::Context>,
     tex: GlTexture,
 }
+
+pub type SharedTexture = Rc<Texture>;
 
 impl Drop for Texture {
     fn drop(&mut self) {
@@ -320,6 +331,10 @@ impl Texture {
             ctx: ctx.gl.clone(),
             tex: t,
         }
+    }
+
+    pub fn into_shared(self) -> SharedTexture {
+        Rc::new(self)
     }
 }
 
@@ -496,7 +511,7 @@ impl Default for SamplerSpec {
 
 pub struct QuadDrawCall {
     ctx: Rc<glow::Context>,
-    texture: Texture,
+    texture: SharedTexture,
     sampler: GlSampler,
     instances: Vec<QuadData>,
     vbo: GlBuffer,
@@ -519,12 +534,18 @@ impl Drop for QuadDrawCall {
             self.ctx.delete_buffer(self.instance_vbo);
             // Don't need to drop the sampler, it's owned by
             // the `GlContext`.
+            // And the texture takes care of itself.
         }
     }
 }
 
 impl QuadDrawCall {
-    fn new(ctx: &mut GlContext, texture: Texture, sampler: SamplerSpec, shader: &Shader) -> Self {
+    fn new(
+        ctx: &mut GlContext,
+        texture: SharedTexture,
+        sampler: SamplerSpec,
+        shader: &Shader,
+    ) -> Self {
         let sampler = ctx.get_sampler(&sampler);
         let gl = &*ctx.gl;
         // TODO: Audit unsafe
@@ -693,12 +714,13 @@ impl QuadPipeline {
 pub struct RenderPass {
     ctx: Rc<glow::Context>,
     output_framebuffer: GlFramebuffer,
-    output_texture: Texture,
+    output_texture: SharedTexture,
     /// This may be a texture or a render buffer, if we don't need to sample
     /// from it we can use a render buffer.  For now, for simplicity, we use
     /// a texture.
     output_depthbuffer: GlRenderbuffer,
     pipelines: Vec<QuadPipeline>,
+    final_pipeline: QuadPipeline,
 }
 
 impl Drop for RenderPass {
@@ -711,9 +733,10 @@ impl Drop for RenderPass {
 }
 
 impl RenderPass {
-    unsafe fn new(ctx: &GlContext, width: usize, height: usize) -> Self {
+    unsafe fn new(ctx: &mut GlContext, width: usize, height: usize) -> Self {
         let gl = &*ctx.gl;
-        let t = Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height);
+        let t =
+            Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height).into_shared();
         // TODO: Is this the right format?  Newp.  What is?
         /*
         let depth = Texture::new_empty(
@@ -778,12 +801,22 @@ impl RenderPass {
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
 
+        let mut final_pipeline = QuadPipeline::new(&ctx, GlContext::default_shader(ctx));
+        let drawcall = QuadDrawCall::new(
+            ctx,
+            t.clone(),
+            SamplerSpec::default(),
+            &final_pipeline.shader,
+        );
+        final_pipeline.drawcalls.push(drawcall);
+
         Self {
             ctx: ctx.gl.clone(),
             output_framebuffer: fb,
             output_texture: t,
             output_depthbuffer: depth,
             pipelines: vec![],
+            final_pipeline,
         }
     }
 
@@ -792,6 +825,9 @@ impl RenderPass {
         for dc in self.pipelines.iter_mut() {
             dc.draw(gl);
         }
+        // Draw to the screen
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        self.final_pipeline.draw(gl);
     }
 }
 
