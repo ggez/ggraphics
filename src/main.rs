@@ -25,7 +25,7 @@ type GlSampler = <Context as glow::HasContext>::Sampler;
 type GlProgram = <Context as glow::HasContext>::Program;
 type GlVertexArray = <Context as glow::HasContext>::VertexArray;
 type GlFramebuffer = <Context as glow::HasContext>::Framebuffer;
-//type GlRenderbuffer = <Context as glow::HasContext>::Renderbuffer;
+type GlRenderbuffer = <Context as glow::HasContext>::Renderbuffer;
 type GlBuffer = <Context as glow::HasContext>::Buffer;
 type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
 
@@ -49,6 +49,7 @@ type Rc<T> = std::rc::Rc<T>;
 pub struct GlContext {
     gl: Rc<glow::Context>,
     pipelines: Vec<QuadPipeline>,
+    passes: Vec<RenderPass>,
     /// Samplers are cached and managed entirely by the GlContext.
     /// You usually only need a few of them so there's no point freeing
     /// them separately, you just ask for the one you want and it gives
@@ -112,9 +113,11 @@ impl GlContext {
             let mut s = GlContext {
                 gl: Rc::new(gl),
                 pipelines: vec![],
+                passes: vec![],
                 samplers: HashMap::new(),
             };
             s.register_debug_callback();
+            let mut pass = RenderPass::new(&s, 800, 600);
             let shader = Shader::new(
                 &s,
                 vertex_shader_source,
@@ -133,7 +136,9 @@ impl GlContext {
             let drawcall =
                 QuadDrawCall::new(&mut s, texture, SamplerSpec::default(), &pipeline.shader);
             pipeline.drawcalls.push(drawcall);
-            s.pipelines.push(pipeline);
+            pass.pipelines.push(pipeline);
+            s.passes.push(pass);
+            //s.pipelines.push(pipeline);
             s
         }
     }
@@ -199,8 +204,8 @@ impl GlContext {
         unsafe {
             self.gl
                 .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
-            for pipeline in self.pipelines.iter_mut() {
-                pipeline.draw(&self.gl);
+            for pass in self.passes.iter_mut() {
+                pass.draw(&self.gl);
             }
         }
     }
@@ -282,7 +287,13 @@ impl Texture {
 
     /// Make a new empty texture with the given format.  Note that reading from the texture
     /// will give undefined results, hence why this is unsafe.
-    pub unsafe fn new_empty(ctx: &GlContext, format: u32, width: usize, height: usize) -> Self {
+    pub unsafe fn new_empty(
+        ctx: &GlContext,
+        format: u32,
+        component_format: u32,
+        width: usize,
+        height: usize,
+    ) -> Self {
         let gl = &*ctx.gl;
         let t = gl.create_texture().unwrap();
         gl.active_texture(glow::TEXTURE0);
@@ -295,7 +306,7 @@ impl Texture {
             i32::try_from(height).unwrap(), // height
             0,                              // border, must always be 0, lulz
             format,                         // format to load the texture from
-            glow::UNSIGNED_BYTE,            // Type of each color element
+            component_format,               // Type of each color element
             None,                           // Actual data
         );
 
@@ -685,12 +696,26 @@ pub struct RenderPass {
     pipelines: Vec<QuadPipeline>,
 }
 
+impl Drop for RenderPass {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_framebuffer(self.output_framebuffer);
+        }
+    }
+}
+
 impl RenderPass {
     unsafe fn new(ctx: &GlContext, width: usize, height: usize) -> Self {
         let gl = &*ctx.gl;
-        let t = Texture::new_empty(ctx, glow::RGBA, width, height);
-        // TODO: Is this the right format?
-        let depth = Texture::new_empty(ctx, glow::DEPTH_COMPONENT16, width, height);
+        let t = Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height);
+        // TODO: Is this the right format?  Newp.  What is?
+        let depth = Texture::new_empty(
+            ctx,
+            glow::DEPTH_COMPONENT16,
+            glow::UNSIGNED_SHORT,
+            width,
+            height,
+        );
         let fb = gl.create_framebuffer().unwrap();
         // Now we have our color texture, depth buffer and framebuffer, and we
         // glue them all together.
