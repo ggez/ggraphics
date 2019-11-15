@@ -233,7 +233,7 @@ impl GlContext {
                 }
             }
         }
-        self.passes[0].pipelines[0].drawcalls[0].add_random();
+        self.passes[0].final_pipeline.drawcalls[0].add_random();
         total_instances
     }
 
