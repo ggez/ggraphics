@@ -2,6 +2,11 @@
 // env RUST_LOG=info cargo run
 //
 // Next up: Render passes
+// Better shader setup, multiple pipelines
+// Clear color -- start refactoring it into an actual lib
+// Make actual projection and stuff.
+// Try out triangle strips?  idk, vertices don't seem much a bottleneck.
+// Resize viewport properly
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -191,7 +196,8 @@ impl GlContext {
     fn draw(&mut self) {
         // This will be safe if pipeline.draw() is
         unsafe {
-            self.gl.clear(glow::COLOR_BUFFER_BIT);
+            self.gl
+                .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
             for pipeline in self.pipelines.iter_mut() {
                 pipeline.draw(&self.gl);
             }
@@ -402,12 +408,11 @@ impl FilterMode {
 }
 
 /// Wrap modes a sampler may have.
-///
-/// TODO: Fill this out as necessary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum WrapMode {
     Clamp,
-    Repeat,
+    Tile,
+    Mirror,
 }
 
 impl WrapMode {
@@ -415,15 +420,14 @@ impl WrapMode {
     fn to_gl(self) -> u32 {
         match self {
             WrapMode::Clamp => glow::CLAMP_TO_EDGE,
-            WrapMode::Repeat => glow::REPEAT,
+            WrapMode::Tile => glow::REPEAT,
+            WrapMode::Mirror => glow::MIRRORED_REPEAT,
         }
     }
 }
 
 /// A description of a sampler.  We cache the actual
 /// samplers as needed in the GlContext.
-///
-/// TODO: Fill this out as necessary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SamplerSpec {
     min_filter: FilterMode,
@@ -443,7 +447,7 @@ impl SamplerSpec {
 
 impl Default for SamplerSpec {
     fn default() -> Self {
-        Self::new(FilterMode::Nearest, FilterMode::Nearest, WrapMode::Repeat)
+        Self::new(FilterMode::Nearest, FilterMode::Nearest, WrapMode::Tile)
     }
 }
 
@@ -577,11 +581,6 @@ impl QuadDrawCall {
         // TODO: audit unsafe
         // Use the `bytemuck` crate?
         let bytes_slice: &[u8] = bytemuck::try_cast_slice(self.instances.as_slice()).unwrap();
-        /*
-        let num_bytes = self.instances.len() * mem::size_of::<QuadData>();
-        let bytes_ptr = self.instances.as_ptr() as *const u8;
-        let bytes_slice = std::slice::from_raw_parts(bytes_ptr, num_bytes);
-        */
 
         // Fill instance buffer
         gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instance_vbo));
