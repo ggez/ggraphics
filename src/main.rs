@@ -486,6 +486,31 @@ unsafe impl bytemuck::Zeroable for QuadData {}
 
 unsafe impl bytemuck::Pod for QuadData {}
 
+impl QuadData {
+    /// Returns a Vec of (element offset, element size)
+    /// pairs.  This is proooobably technically a little UB,
+    /// see https://github.com/rust-lang/rust/issues/48956#issuecomment-544506419
+    /// but with repr(C) it's probably safe enough.
+    unsafe fn layout() -> Vec<(usize, usize)> {
+        let thing: QuadData = mem::zeroed();
+        let thing_base = &thing as *const _;
+        let offset_offset = (&thing.offset as *const [f32; 2] as usize) - thing_base as usize;
+        let offset_size = mem::size_of::<[f32; 2]>();
+
+        let color_offset = (&thing.color as *const [f32; 4] as usize) - thing_base as usize;
+        let color_size = mem::size_of::<[f32; 4]>();
+
+        let scale_offset = (&thing.scale as *const [f32; 2] as usize) - thing_base as usize;
+        let scale_size = mem::size_of::<[f32; 2]>();
+
+        vec![
+            (offset_offset, offset_size),
+            (color_offset, color_size),
+            (scale_offset, scale_size),
+        ]
+    }
+}
+
 /// Filter modes a sampler may have.
 ///
 /// TODO: Fill this out as necessary.
@@ -578,6 +603,13 @@ impl Drop for QuadDrawCall {
 }
 
 impl QuadDrawCall {
+    unsafe fn set_vertex_pointers() {
+        let layout = QuadData::layout();
+        for (offset, size) in layout {
+            info!("Layout: {} offset, {} size", offset, size);
+        }
+    }
+
     fn new(
         ctx: &mut GlContext,
         texture: SharedTexture,
@@ -616,6 +648,7 @@ impl QuadDrawCall {
             );
             gl.enable_vertex_attrib_array(dummy_attrib);
 
+            Self::set_vertex_pointers();
             // We DO need a buffer of per-vertex attributes, WebGL gets snippy
             // if we just give it per-instance attributes and say "yeah each
             // vertex just has nothing attached to it".  Which is exactly what
