@@ -499,7 +499,8 @@ impl QuadData {
     /// see https://github.com/rust-lang/rust/issues/48956#issuecomment-544506419
     /// but with repr(C) it's probably safe enough.
     ///
-    unsafe fn layout() -> Vec<(usize, usize)> {
+    /// Also returns the name of the shader variable associated with each field...
+    unsafe fn layout() -> Vec<(&'static str, usize, usize)> {
         // It'd be nice if we could make this `const` but
         // doing const pointer arithmatic is unstable.
         let thing = QuadData::empty();
@@ -514,9 +515,9 @@ impl QuadData {
         let scale_size = mem::size_of_val(&thing.scale);
 
         vec![
-            (offset_offset, offset_size),
-            (color_offset, color_size),
-            (scale_offset, scale_size),
+            ("model_offset", offset_offset, offset_size),
+            ("model_color", color_offset, color_size),
+            ("model_scale", scale_offset, scale_size),
         ]
     }
 }
@@ -613,10 +614,24 @@ impl Drop for QuadDrawCall {
 }
 
 impl QuadDrawCall {
-    unsafe fn set_vertex_pointers() {
+    unsafe fn set_vertex_pointers(ctx: &GlContext, shader: &Shader) {
+        let gl = &*ctx.gl;
         let layout = QuadData::layout();
-        for (offset, size) in layout {
+        for (name, offset, size) in layout {
             info!("Layout: {} offset, {} size", offset, size);
+            let element_size = mem::size_of::<f32>();
+            let attrib_location =
+                u32::try_from(gl.get_attrib_location(shader.program, name)).unwrap();
+            gl.vertex_attrib_pointer_f32(
+                attrib_location,
+                (size / element_size) as i32,
+                glow::FLOAT,
+                false,
+                size as i32,
+                offset as i32,
+            );
+            gl.vertex_attrib_divisor(attrib_location, 1);
+            gl.enable_vertex_attrib_array(attrib_location);
         }
     }
 
@@ -658,7 +673,6 @@ impl QuadDrawCall {
             );
             gl.enable_vertex_attrib_array(dummy_attrib);
 
-            Self::set_vertex_pointers();
             // We DO need a buffer of per-vertex attributes, WebGL gets snippy
             // if we just give it per-instance attributes and say "yeah each
             // vertex just has nothing attached to it".  Which is exactly what
@@ -676,6 +690,8 @@ impl QuadDrawCall {
             let instance_vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
             // TODO: Automate all this nonsense
+            Self::set_vertex_pointers(ctx, shader);
+            /*
             let model_offset_attrib =
                 u32::try_from(gl.get_attrib_location(shader.program, "model_offset")).unwrap();
             gl.vertex_attrib_pointer_f32(
@@ -714,6 +730,7 @@ impl QuadDrawCall {
             );
             gl.vertex_attrib_divisor(model_scale_attrib, 1);
             gl.enable_vertex_attrib_array(model_scale_attrib);
+            */
 
             // We can't define locations for uniforms, yet.
             let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
@@ -749,7 +766,7 @@ impl QuadDrawCall {
         let quad = QuadData {
             offset: [x, y],
             color: [r, g, b, a],
-            scale: [1.5, 1.5],
+            scale: [0.2, 0.2],
         };
         self.add(quad);
     }
