@@ -487,13 +487,23 @@ unsafe impl bytemuck::Zeroable for QuadData {}
 unsafe impl bytemuck::Pod for QuadData {}
 
 impl QuadData {
+    const fn empty() -> Self {
+        QuadData {
+            offset: [0.0, 0.0],
+            color: [0.0, 0.0, 0.0, 0.0],
+            scale: [0.0, 0.0],
+        }
+    }
     /// Returns a Vec of (element offset, element size)
     /// pairs.  This is proooobably technically a little UB,
     /// see https://github.com/rust-lang/rust/issues/48956#issuecomment-544506419
     /// but with repr(C) it's probably safe enough.
+    ///
     unsafe fn layout() -> Vec<(usize, usize)> {
-        let thing: QuadData = mem::zeroed();
-        let thing_base = &thing as *const _;
+        // It'd be nice if we could make this `const` but
+        // doing const pointer arithmatic is unstable.
+        let thing = QuadData::empty();
+        let thing_base = &thing as *const QuadData;
         let offset_offset = (&thing.offset as *const [f32; 2] as usize) - thing_base as usize;
         let offset_size = mem::size_of::<[f32; 2]>();
 
