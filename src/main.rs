@@ -14,6 +14,7 @@ use std::mem;
 use std::time::{Duration, Instant};
 
 use bytemuck;
+use glam::{Mat4, Vec3};
 use glow::*;
 use image;
 use log::*;
@@ -29,18 +30,10 @@ type GlRenderbuffer = <Context as glow::HasContext>::Renderbuffer;
 type GlBuffer = <Context as glow::HasContext>::Buffer;
 type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
 
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::prelude::*;
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
-pub fn wasm_main() {
-    main();
-}
-
 /// TODO: Figure out what to do with this, and whether it can work on wasm.
 /// For now though, Rc is fine.
 type Rc<T> = std::rc::Rc<T>;
-//type Ref<T> = Arc<T>;
+//type Rc<T> = std::sync::Arc<T>;
 
 /// A type that contains all the STUFF we need for displaying graphics
 /// and handling events on both desktop and web.
@@ -56,6 +49,42 @@ pub struct GlContext {
     /// it to you.
     samplers: HashMap<SamplerSpec, GlSampler>,
     shader_version: String,
+
+    lulz: oorandom::Rand32,
+}
+
+fn ortho(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> [[f32; 4]; 4] {
+    let c0r0 = 2.0 / (right - left);
+    let c0r1 = 0.0;
+    let c0r2 = 0.0;
+    let c0r3 = 0.0;
+
+    let c1r0 = 0.0;
+    let c1r1 = 2.0 / (top - bottom);
+    let c1r2 = 0.0;
+    let c1r3 = 0.0;
+
+    let c2r0 = 0.0;
+    let c2r1 = 0.0;
+    let c2r2 = -2.0 / (far - near);
+    let c2r3 = 0.0;
+
+    let c3r0 = -(right + left) / (right - left);
+    let c3r1 = -(top + bottom) / (top - bottom);
+    let c3r2 = -(far + near) / (far - near);
+    let c3r3 = 1.0;
+
+    // our matrices are column-major, so here we are.
+    [
+        [c0r0, c0r1, c0r2, c0r3],
+        [c1r0, c1r1, c1r2, c1r3],
+        [c2r0, c2r1, c2r2, c2r3],
+        [c3r0, c3r1, c3r2, c3r3],
+    ]
+}
+
+fn ortho_mat(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> Mat4 {
+    Mat4::from_cols_array_2d(&ortho(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0));
 }
 
 impl GlContext {
@@ -86,12 +115,15 @@ impl GlContext {
             // optimized out and we'll fail to look it up later.
             layout(location = 0) in vec2 vertex_dummy;
             layout(location = 1) in vec2 model_offset;
+            uniform mat4 projection;
+
             out vec2 vert;
             out vec2 tex_coord;
+
             void main() {
                 vert = verts[gl_VertexID % 6] / 8.0 + vertex_dummy + model_offset;
                 tex_coord = uvs[gl_VertexID];
-                gl_Position = vec4(vert, 0.0, 1.0);
+                gl_Position = vec4(vert, 0.0, 1.0) * projection;
             }"#;
         let fragment_shader_source = r#"precision mediump float;
             in vec2 vert;
@@ -119,12 +151,14 @@ impl GlContext {
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            let lulz = oorandom::Rand32::new(314159);
             let mut s = GlContext {
                 gl: Rc::new(gl),
                 //pipelines: vec![],
                 passes: vec![],
                 samplers: HashMap::new(),
                 shader_version: shader_version.to_string(),
+                lulz,
             };
             s.register_debug_callback();
             let mut pass = RenderPass::new(&mut s, 800, 600);
@@ -226,14 +260,14 @@ impl GlContext {
                 for pipeline in pass.pipelines.iter_mut() {
                     for drawcall in pipeline.drawcalls.iter_mut() {
                         for _ in 0..30 {
-                            drawcall.add_random();
+                            drawcall.add_random(&mut self.lulz);
                         }
                         total_instances += drawcall.instances.len();
                     }
                 }
             }
         }
-        self.passes[0].final_pipeline.drawcalls[0].add_random();
+        self.passes[0].final_pipeline.drawcalls[0].add_random(&mut self.lulz);
         total_instances
     }
 
@@ -251,7 +285,7 @@ impl GlContext {
     }
 }
 
-/// TODO: This is actually not safe to Clone, we'd have to Rc it.
+/// TODO: This is actually not safe to Clone, we'd have to Rc the GlTexture.
 /// Which is fine, but then inconvenient for other things maybe.
 /// Think about it.
 #[derive(Debug)]
@@ -522,8 +556,6 @@ pub struct QuadDrawCall {
     /// compared to what the VBO contains, so we can
     /// only upload to the VBO on changes
     dirty: bool,
-
-    lulz: oorandom::Rand32,
 }
 
 impl Drop for QuadDrawCall {
@@ -612,7 +644,6 @@ impl QuadDrawCall {
 
             gl.bind_vertex_array(None);
 
-            let lulz = oorandom::Rand32::new(314159);
             Self {
                 ctx: ctx.gl.clone(),
                 vbo,
@@ -623,7 +654,6 @@ impl QuadDrawCall {
                 texture_location,
                 instances: vec![],
                 dirty: true,
-                lulz,
             }
         }
     }
@@ -633,9 +663,9 @@ impl QuadDrawCall {
         self.instances.push(quad);
     }
 
-    fn add_random(&mut self) {
-        let x = self.lulz.rand_float() * 2.0 - 1.0;
-        let y = self.lulz.rand_float() * 2.0 - 1.0;
+    fn add_random(&mut self, rand: &mut oorandom::Rand32) {
+        let x = rand.rand_float() * 2.0 - 1.0;
+        let y = rand.rand_float() * 2.0 - 1.0;
         let quad = QuadData { offset: [x, y] };
         self.add(quad);
     }
@@ -690,18 +720,34 @@ impl QuadDrawCall {
 pub struct QuadPipeline {
     drawcalls: Vec<QuadDrawCall>,
     shader: Shader,
+    projection: Mat4,
+    projection_location: GlUniformLocation,
 }
 
 impl QuadPipeline {
-    fn new(_ctx: &GlContext, shader: Shader) -> Self {
+    unsafe fn new(ctx: &GlContext, shader: Shader) -> Self {
+        let gl = &*ctx.gl;
+        //let projection = Mat4::identity();
+        let projection = ortho_mat(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0);
+        let projection_location = gl
+            .get_uniform_location(shader.program, "projection")
+            //.get_uniform_location(shader.program, "tex")
+            .unwrap();
         Self {
             drawcalls: vec![],
             shader,
+            projection,
+            projection_location,
         }
     }
 
     unsafe fn draw(&mut self, gl: &Context) {
         gl.use_program(Some(self.shader.program));
+        gl.uniform_matrix_4_f32_slice(
+            Some(self.projection_location),
+            false,
+            &self.projection.to_cols_array(),
+        );
         for dc in self.drawcalls.iter_mut() {
             dc.draw(gl);
         }
@@ -835,6 +881,14 @@ impl RenderPass {
         gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         self.final_pipeline.draw(gl);
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+use wasm_bindgen::prelude::*;
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
+pub fn wasm_main() {
+    main();
 }
 
 #[cfg(target_arch = "wasm32")]
