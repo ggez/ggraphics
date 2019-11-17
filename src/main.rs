@@ -14,7 +14,7 @@ use std::mem;
 use std::time::{Duration, Instant};
 
 use bytemuck;
-use glam::{Mat4, Vec3};
+use glam::Mat4;
 use glow::*;
 use image;
 use log::*;
@@ -505,13 +505,13 @@ impl QuadData {
         let thing = QuadData::empty();
         let thing_base = &thing as *const QuadData;
         let offset_offset = (&thing.offset as *const [f32; 2] as usize) - thing_base as usize;
-        let offset_size = mem::size_of::<[f32; 2]>();
+        let offset_size = mem::size_of_val(&thing.offset);
 
         let color_offset = (&thing.color as *const [f32; 4] as usize) - thing_base as usize;
-        let color_size = mem::size_of::<[f32; 4]>();
+        let color_size = mem::size_of_val(&thing.color);
 
         let scale_offset = (&thing.scale as *const [f32; 2] as usize) - thing_base as usize;
-        let scale_size = mem::size_of::<[f32; 2]>();
+        let scale_size = mem::size_of_val(&thing.scale);
 
         vec![
             (offset_offset, offset_size),
