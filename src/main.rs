@@ -114,8 +114,9 @@ impl GlContext {
             // Gotta actually use this dummy value or else it'll get
             // optimized out and we'll fail to look it up later.
             layout(location = 0) in vec2 vertex_dummy;
-            layout(location = 1) in vec2 model_offset;
-            layout(location = 2) in vec4 model_color;
+            layout(location = 1) in vec4 model_color;
+            layout(location = 2) in vec2 model_offset;
+            layout(location = 3) in vec2 model_scale;
             uniform mat4 projection;
 
             out vec2 vert;
@@ -123,7 +124,7 @@ impl GlContext {
             out vec4 frag_color;
 
             void main() {
-                vert = verts[gl_VertexID % 6] / 8.0 + vertex_dummy + model_offset;
+                vert = verts[gl_VertexID % 6] * model_scale + vertex_dummy + model_offset;
                 tex_coord = uvs[gl_VertexID];
                 frag_color = model_color;
                 gl_Position = vec4(vert, 0.0, 1.0) * projection;
@@ -476,8 +477,9 @@ pub struct DrawParam {
 pub struct QuadData {
     //transform: [f32; 16],
     //rect: [f32; 4],
-    color: [f32; 4],
     offset: [f32; 2],
+    color: [f32; 4],
+    scale: [f32; 2],
 }
 
 unsafe impl bytemuck::Zeroable for QuadData {}
@@ -630,6 +632,7 @@ impl QuadDrawCall {
             // Now create another VBO containing per-instance data
             let instance_vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
+            // TODO: Automate all this nonsense
             let model_offset_attrib =
                 u32::try_from(gl.get_attrib_location(shader.program, "model_offset")).unwrap();
             gl.vertex_attrib_pointer_f32(
@@ -655,6 +658,19 @@ impl QuadDrawCall {
             );
             gl.vertex_attrib_divisor(model_color_attrib, 1);
             gl.enable_vertex_attrib_array(model_color_attrib);
+
+            let model_scale_attrib =
+                u32::try_from(gl.get_attrib_location(shader.program, "model_scale")).unwrap();
+            gl.vertex_attrib_pointer_f32(
+                model_scale_attrib,
+                2,
+                glow::FLOAT,
+                false,
+                (2 * mem::size_of::<f32>()) as i32, //stride
+                (6 * mem::size_of::<f32>()) as i32, //offset
+            );
+            gl.vertex_attrib_divisor(model_scale_attrib, 1);
+            gl.enable_vertex_attrib_array(model_scale_attrib);
 
             // We can't define locations for uniforms, yet.
             let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
@@ -690,6 +706,7 @@ impl QuadDrawCall {
         let quad = QuadData {
             offset: [x, y],
             color: [r, g, b, a],
+            scale: [1.5, 1.5],
         };
         self.add(quad);
     }
