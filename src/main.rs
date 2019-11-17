@@ -84,7 +84,7 @@ fn ortho(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> [
 }
 
 fn ortho_mat(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> Mat4 {
-    Mat4::from_cols_array_2d(&ortho(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0));
+    Mat4::from_cols_array_2d(&ortho(left, right, top, bottom, far, near))
 }
 
 impl GlContext {
@@ -115,19 +115,23 @@ impl GlContext {
             // optimized out and we'll fail to look it up later.
             layout(location = 0) in vec2 vertex_dummy;
             layout(location = 1) in vec2 model_offset;
+            layout(location = 2) in vec4 model_color;
             uniform mat4 projection;
 
             out vec2 vert;
             out vec2 tex_coord;
+            out vec4 frag_color;
 
             void main() {
                 vert = verts[gl_VertexID % 6] / 8.0 + vertex_dummy + model_offset;
                 tex_coord = uvs[gl_VertexID];
+                frag_color = model_color;
                 gl_Position = vec4(vert, 0.0, 1.0) * projection;
             }"#;
         let fragment_shader_source = r#"precision mediump float;
             in vec2 vert;
             in vec2 tex_coord;
+            in vec4 frag_color;
             uniform sampler2D tex;
 
             layout(location=0) out vec4 color;
@@ -135,7 +139,7 @@ impl GlContext {
             void main() {
                 // Useful for looking at UV values
                 //color = vec4(tex_coord, 0.5, 1.0);
-                color = texture(tex, tex_coord);
+                color = texture(tex, tex_coord) * frag_color;
             }"#;
         Shader::new(
             &ctx,
@@ -472,7 +476,7 @@ pub struct DrawParam {
 pub struct QuadData {
     //transform: [f32; 16],
     //rect: [f32; 4],
-    //color: [f32; 4],
+    color: [f32; 4],
     offset: [f32; 2],
 }
 
@@ -595,10 +599,10 @@ impl QuadDrawCall {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
             // TODO: https://github.com/grovesNL/glow/issues/54
-            let offset_attrib =
+            let dummy_attrib =
                 u32::try_from(gl.get_attrib_location(shader.program, "vertex_dummy")).unwrap();
             gl.vertex_attrib_pointer_f32(
-                offset_attrib,
+                dummy_attrib,
                 2,
                 glow::FLOAT,
                 false,
@@ -608,7 +612,7 @@ impl QuadDrawCall {
                 0,
                 0,
             );
-            gl.enable_vertex_attrib_array(offset_attrib);
+            gl.enable_vertex_attrib_array(dummy_attrib);
 
             // We DO need a buffer of per-vertex attributes, WebGL gets snippy
             // if we just give it per-instance attributes and say "yeah each
@@ -639,6 +643,19 @@ impl QuadDrawCall {
             gl.vertex_attrib_divisor(model_offset_attrib, 1);
             gl.enable_vertex_attrib_array(model_offset_attrib);
 
+            let model_color_attrib =
+                u32::try_from(gl.get_attrib_location(shader.program, "model_color")).unwrap();
+            gl.vertex_attrib_pointer_f32(
+                model_color_attrib,
+                4,
+                glow::FLOAT,
+                false,
+                (4 * mem::size_of::<f32>()) as i32, //stride
+                (2 * mem::size_of::<f32>()) as i32, //offset
+            );
+            gl.vertex_attrib_divisor(model_color_attrib, 1);
+            gl.enable_vertex_attrib_array(model_color_attrib);
+
             // We can't define locations for uniforms, yet.
             let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
 
@@ -666,7 +683,14 @@ impl QuadDrawCall {
     fn add_random(&mut self, rand: &mut oorandom::Rand32) {
         let x = rand.rand_float() * 2.0 - 1.0;
         let y = rand.rand_float() * 2.0 - 1.0;
-        let quad = QuadData { offset: [x, y] };
+        let r = rand.rand_float();
+        let g = rand.rand_float();
+        let b = rand.rand_float();
+        let a = 1.0;
+        let quad = QuadData {
+            offset: [x, y],
+            color: [r, g, b, a],
+        };
         self.add(quad);
     }
 
