@@ -118,16 +118,17 @@ impl GlContext {
             layout(location = 2) in vec2 model_offset;
             layout(location = 3) in vec2 model_scale;
             layout(location = 4) in vec4 model_src_rect;
+            layout(location = 5) in float model_rotation;
             uniform mat4 projection;
 
             out vec2 vert;
             out vec2 tex_coord;
             out vec4 frag_color;
-            out vec4 src_rect;
 
             void main() {
-                vert = verts[gl_VertexID % 6] * model_scale + vertex_dummy + model_offset;
-                tex_coord = uvs[gl_VertexID];
+                vert = verts[gl_VertexID % 6] * model_scale + vertex_dummy * model_rotation + model_offset;
+                // TODO: Double-check these UV's are correct
+                tex_coord = uvs[gl_VertexID] * model_src_rect.zw + model_src_rect.xy;
                 frag_color = model_color;
                 gl_Position = vec4(vert, 0.0, 1.0) * projection;
             }"#;
@@ -135,7 +136,6 @@ impl GlContext {
             in vec2 vert;
             in vec2 tex_coord;
             in vec4 frag_color;
-            in vec4 src_rect;
             uniform sampler2D tex;
 
             layout(location=0) out vec4 color;
@@ -143,6 +143,7 @@ impl GlContext {
             void main() {
                 // Useful for looking at UV values
                 //color = vec4(tex_coord, 0.5, 1.0);
+
                 color = texture(tex, tex_coord) * frag_color;
             }"#;
         Shader::new(
@@ -267,7 +268,7 @@ impl GlContext {
             for pass in self.passes.iter_mut() {
                 for pipeline in pass.pipelines.iter_mut() {
                     for drawcall in pipeline.drawcalls.iter_mut() {
-                        for _ in 0..30 {
+                        for _ in 0..1 {
                             drawcall.add_random(&mut self.lulz);
                         }
                         total_instances += drawcall.instances.len();
@@ -478,11 +479,11 @@ pub struct DrawParam {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
-    //transform: [f32; 16],
-    //src_rect: [f32; 4],
     offset: [f32; 2],
     scale: [f32; 2],
     color: [f32; 4],
+    src_rect: [f32; 4],
+    rotation: f32,
 }
 
 unsafe impl bytemuck::Zeroable for QuadData {}
@@ -495,6 +496,8 @@ impl QuadData {
             offset: [0.0, 0.0],
             color: [0.0, 0.0, 0.0, 0.0],
             scale: [0.0, 0.0],
+            src_rect: [0.0, 0.0, 1.0, 1.0],
+            rotation: 0.0,
         }
     }
     /// Returns a Vec of (element offset, element size)
@@ -517,10 +520,18 @@ impl QuadData {
         let scale_offset = (&thing.scale as *const [f32; 2] as usize) - thing_base as usize;
         let scale_size = mem::size_of_val(&thing.scale);
 
+        let src_rect_offset = (&thing.src_rect as *const [f32; 4] as usize) - thing_base as usize;
+        let src_rect_size = mem::size_of_val(&thing.src_rect);
+
+        let rotation_offset = (&thing.rotation as *const f32 as usize) - thing_base as usize;
+        let rotation_size = mem::size_of_val(&thing.rotation);
+
         vec![
             ("model_offset", offset_offset, offset_size),
             ("model_color", color_offset, color_size),
             ("model_scale", scale_offset, scale_size),
+            ("model_src_rect", src_rect_offset, src_rect_size),
+            ("model_rotation", rotation_offset, rotation_size),
         ]
     }
 }
@@ -632,7 +643,6 @@ impl QuadDrawCall {
                 (size / element_size) as i32,
                 glow::FLOAT,
                 false,
-                //size as i32,
                 mem::size_of::<QuadData>() as i32,
                 offset as i32,
             );
@@ -731,7 +741,9 @@ impl QuadDrawCall {
         let quad = QuadData {
             offset: [x, y],
             color: [r, g, b, a],
-            scale: [0.2, 0.2],
+            scale: [1.2, 1.2],
+            src_rect: [0.0, 0.0, 1.0, 1.0],
+            rotation: 0.0,
         };
         self.add(quad);
     }
