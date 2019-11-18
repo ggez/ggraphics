@@ -117,11 +117,13 @@ impl GlContext {
             layout(location = 1) in vec4 model_color;
             layout(location = 2) in vec2 model_offset;
             layout(location = 3) in vec2 model_scale;
+            layout(location = 4) in vec4 model_src_rect;
             uniform mat4 projection;
 
             out vec2 vert;
             out vec2 tex_coord;
             out vec4 frag_color;
+            out vec4 src_rect;
 
             void main() {
                 vert = verts[gl_VertexID % 6] * model_scale + vertex_dummy + model_offset;
@@ -133,6 +135,7 @@ impl GlContext {
             in vec2 vert;
             in vec2 tex_coord;
             in vec4 frag_color;
+            in vec4 src_rect;
             uniform sampler2D tex;
 
             layout(location=0) out vec4 color;
@@ -476,10 +479,10 @@ pub struct DrawParam {
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
     //transform: [f32; 16],
-    //rect: [f32; 4],
+    //src_rect: [f32; 4],
     offset: [f32; 2],
-    color: [f32; 4],
     scale: [f32; 2],
+    color: [f32; 4],
 }
 
 unsafe impl bytemuck::Zeroable for QuadData {}
@@ -622,12 +625,15 @@ impl QuadDrawCall {
             let element_size = mem::size_of::<f32>();
             let attrib_location =
                 u32::try_from(gl.get_attrib_location(shader.program, name)).unwrap();
+            // TODO: Okay, something is wrong with the strides or such here.  But we're not gonna
+            // sweat it yet.
             gl.vertex_attrib_pointer_f32(
                 attrib_location,
                 (size / element_size) as i32,
                 glow::FLOAT,
                 false,
-                size as i32,
+                //size as i32,
+                mem::size_of::<QuadData>() as i32,
                 offset as i32,
             );
             gl.vertex_attrib_divisor(attrib_location, 1);
@@ -689,48 +695,7 @@ impl QuadDrawCall {
             // Now create another VBO containing per-instance data
             let instance_vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
-            // TODO: Automate all this nonsense
             Self::set_vertex_pointers(ctx, shader);
-            /*
-            let model_offset_attrib =
-                u32::try_from(gl.get_attrib_location(shader.program, "model_offset")).unwrap();
-            gl.vertex_attrib_pointer_f32(
-                model_offset_attrib,
-                2,
-                glow::FLOAT,
-                false,
-                (2 * mem::size_of::<f32>()) as i32,
-                0,
-            );
-            gl.vertex_attrib_divisor(model_offset_attrib, 1);
-            gl.enable_vertex_attrib_array(model_offset_attrib);
-
-            let model_color_attrib =
-                u32::try_from(gl.get_attrib_location(shader.program, "model_color")).unwrap();
-            gl.vertex_attrib_pointer_f32(
-                model_color_attrib,
-                4,
-                glow::FLOAT,
-                false,
-                (4 * mem::size_of::<f32>()) as i32, //stride
-                (2 * mem::size_of::<f32>()) as i32, //offset
-            );
-            gl.vertex_attrib_divisor(model_color_attrib, 1);
-            gl.enable_vertex_attrib_array(model_color_attrib);
-
-            let model_scale_attrib =
-                u32::try_from(gl.get_attrib_location(shader.program, "model_scale")).unwrap();
-            gl.vertex_attrib_pointer_f32(
-                model_scale_attrib,
-                2,
-                glow::FLOAT,
-                false,
-                (2 * mem::size_of::<f32>()) as i32, //stride
-                (6 * mem::size_of::<f32>()) as i32, //offset
-            );
-            gl.vertex_attrib_divisor(model_scale_attrib, 1);
-            gl.enable_vertex_attrib_array(model_scale_attrib);
-            */
 
             // We can't define locations for uniforms, yet.
             let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
