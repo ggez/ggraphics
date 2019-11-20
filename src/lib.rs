@@ -2,11 +2,12 @@
 // env RUST_LOG=info cargo run
 //
 // Next up: Render passes
-// Better shader setup, multiple pipelines
-// Clear color -- start refactoring it into an actual lib
+// multiple pipelines
+// start refactoring it into an actual lib
 // Make actual projection and stuff.
-// Try out triangle strips?  idk, vertices don't seem much a bottleneck.
-// Resize viewport properly
+// Try out triangle strips?  idk, vertices don't seem much a bottleneck.  We could easily make
+// primitive type part of a DrawCall...
+// Resize viewport properly -- also needed for render passes
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -394,6 +395,7 @@ impl Shader {
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct DrawParam {
     /// TODO: euclid, vek, or what?  UGH.
+    /// Hek glam is pretty good
     pub dest: [f32; 2],
     //pub dest: Point2,
     /*
@@ -581,8 +583,6 @@ impl QuadDrawCall {
             let element_size = mem::size_of::<f32>();
             let attrib_location =
                 u32::try_from(gl.get_attrib_location(shader.program, name)).unwrap();
-            // TODO: Okay, something is wrong with the strides or such here.  But we're not gonna
-            // sweat it yet.
             gl.vertex_attrib_pointer_f32(
                 attrib_location,
                 (size / element_size) as i32,
@@ -618,7 +618,7 @@ impl QuadDrawCall {
             let vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
-            // TODO: https://github.com/grovesNL/glow/issues/54
+            // https://github.com/grovesNL/glow/issues/54
             let dummy_attrib =
                 u32::try_from(gl.get_attrib_location(shader.program, "vertex_dummy")).unwrap();
             gl.vertex_attrib_pointer_f32(
@@ -696,7 +696,6 @@ impl QuadDrawCall {
     /// Upload the array of instances to our VBO
     unsafe fn upload_instances(&mut self, gl: &Context) {
         // TODO: audit unsafe
-        // Use the `bytemuck` crate?
         let bytes_slice: &[u8] = bytemuck::try_cast_slice(self.instances.as_slice()).unwrap();
 
         // Fill instance buffer
@@ -780,6 +779,8 @@ impl QuadPipeline {
 /// Currently, no input framebuffers or such.
 /// We're not actually intending to reproduce Rendy's Graph type here.
 /// This may eventually feed into a bounce buffer or such though.
+///
+/// TODO: Clear color should be part of this.
 pub struct RenderPass {
     ctx: Rc<glow::Context>,
     output_framebuffer: GlFramebuffer,
@@ -796,7 +797,7 @@ impl Drop for RenderPass {
     fn drop(&mut self) {
         unsafe {
             self.ctx.delete_framebuffer(self.output_framebuffer);
-            // viciously leak the depth buffer for now.  cruel!
+            // TODO: We viciously leak the depth buffer for now.  cruel!
         }
     }
 }
