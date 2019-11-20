@@ -1,12 +1,5 @@
 // Suggested logging level for debugging:
 // env RUST_LOG=info cargo run
-//
-// Next up: Render passes
-// Better shader setup, multiple pipelines
-// Clear color -- start refactoring it into an actual lib
-// Make actual projection and stuff.
-// Try out triangle strips?  idk, vertices don't seem much a bottleneck.
-// Resize viewport properly
 
 use ggraphics::*;
 
@@ -91,7 +84,8 @@ fn run_glutin() {
             let context = glow::Context::from_loader_function(|s| {
                 windowed_context.get_proc_address(s) as *const _
             });
-            (context, el, windowed_context, "#version 410")
+            //(context, el, windowed_context, "#version 410")
+            (context, el, windowed_context, "#version 300 es")
         };
         trace!("Window created");
 

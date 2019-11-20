@@ -1,10 +1,10 @@
-// Next up: Render passes
-// multiple pipelines
-// start refactoring it into an actual lib
-// Make actual projection and stuff.
+// Next up:
+// Make projection better, make rotation work, rename 'offset' to 'dest' and add a rotation offset
+// multiple pipelines, diff. shaders and stuff,
 // Try out triangle strips?  idk, vertices don't seem much a bottleneck.  We could easily make
 // primitive type part of a DrawCall...
 // Resize viewport properly -- also needed for render passes
+// Lib quality stuff -- deny no docs, vet public API, etc
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -470,6 +470,7 @@ impl QuadData {
             rotation: 0.0,
         }
     }
+
     /// Returns a Vec of (element offset, element size)
     /// pairs.  This is proooobably technically a little UB,
     /// see https://github.com/rust-lang/rust/issues/48956#issuecomment-544506419
@@ -651,7 +652,8 @@ impl QuadDrawCall {
                 false,
                 // We can just say the stride of this guy is 0, since
                 // we never actually use it (yet).  That lets us use a
-                // widdle bitty awway for this.
+                // widdle bitty awway for this instead of having an
+                // unused empty value for every vertex of every instance.
                 0,
                 0,
             );
@@ -667,7 +669,7 @@ impl QuadDrawCall {
             // And we only need enough vertices to draw one quad and never have to alter it.
             // We could reuse the same buffer for all QuadDrawCall's, tbh, but that seems
             // a bit overkill.
-            let empty_slice: &[u8] = &[0; 8 * 6];
+            let empty_slice: &[u8] = &[0; mem::size_of::<f32>() * 6];
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, empty_slice, glow::STREAM_DRAW);
 
             // Now create another VBO containing per-instance data
