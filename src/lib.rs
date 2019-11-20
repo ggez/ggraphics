@@ -39,7 +39,6 @@ type Rc<T> = std::rc::Rc<T>;
 /// at compile time, rather than trying to use generics or such.
 pub struct GlContext {
     gl: Rc<glow::Context>,
-    //pipelines: Vec<QuadPipeline>,
     passes: Vec<RenderPass>,
     /// Samplers are cached and managed entirely by the GlContext.
     /// You usually only need a few of them so there's no point freeing
@@ -113,23 +112,35 @@ impl GlContext {
                 lulz,
             };
             s.register_debug_callback();
-            let mut pass = RenderPass::new(&mut s, 800, 600);
-            let shader = Self::default_shader(&s);
-            let mut pipeline = QuadPipeline::new(&s, shader);
-            let texture = {
-                let image_bytes = include_bytes!("data/wabbit_alpha.png");
-                let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
-                let (w, h) = image_rgba.dimensions();
-                let image_rgba_bytes = image_rgba.into_raw();
-                //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
-                Texture::new(&s, &image_rgba_bytes, w as usize, h as usize).into_shared()
-            };
-            let drawcall =
-                QuadDrawCall::new(&mut s, texture, SamplerSpec::default(), &pipeline.shader);
-            pipeline.drawcalls.push(drawcall);
-            pass.pipelines.push(pipeline);
-            s.passes.push(pass);
-            //s.pipelines.push(pipeline);
+
+            {
+                let mut pass1 = RenderPass::new(&mut s, 800, 600);
+                let shader = Self::default_shader(&s);
+                let mut pipeline = QuadPipeline::new(&s, shader);
+                let texture = {
+                    let image_bytes = include_bytes!("data/wabbit_alpha.png");
+                    let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
+                    let (w, h) = image_rgba.dimensions();
+                    let image_rgba_bytes = image_rgba.into_raw();
+                    //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
+                    Texture::new(&s, &image_rgba_bytes, w as usize, h as usize).into_shared()
+                };
+                let drawcall =
+                    QuadDrawCall::new(&mut s, texture, SamplerSpec::default(), &pipeline.shader);
+                pipeline.drawcalls.push(drawcall);
+                pass1.pipelines.push(pipeline);
+                let texture2 = pass1.get_texture().unwrap();
+                s.passes.push(pass1);
+
+                let mut pass2 = RenderPass::new_screen(&mut s, 800, 600);
+                let shader = Self::default_shader(&s);
+                let mut pipeline = QuadPipeline::new(&s, shader);
+                let drawcall =
+                    QuadDrawCall::new(&mut s, texture2, SamplerSpec::default(), &pipeline.shader);
+                pipeline.drawcalls.push(drawcall);
+                pass2.pipelines.push(pipeline);
+                s.passes.push(pass2);
+            }
             s
         }
     }
@@ -208,8 +219,10 @@ impl GlContext {
         // be okay for order-of-magnitude.
         let mut total_instances = 0;
         if frametime.as_secs_f64() < 0.017 {
-            for pass in self.passes.iter_mut() {
-                for pipeline in pass.pipelines.iter_mut() {
+            // Render our bunnies to a texture
+            {
+                let pass1 = &mut self.passes[0];
+                for pipeline in pass1.pipelines.iter_mut() {
                     for drawcall in pipeline.drawcalls.iter_mut() {
                         for _ in 0..1 {
                             drawcall.add_random(&mut self.lulz);
@@ -218,8 +231,21 @@ impl GlContext {
                     }
                 }
             }
+
+            // Render that texture to screen, only a few times
+            {
+                let pass2 = &mut self.passes[1];
+                // yes I know the numbers make you cry
+                // i drink your tears :D
+                for pipeline in pass2.pipelines.iter_mut() {
+                    for drawcall in pipeline.drawcalls.iter_mut() {
+                        if drawcall.instances.len() < 4 {
+                            drawcall.add_random(&mut self.lulz);
+                        }
+                    }
+                }
+            }
         }
-        self.passes[0].final_pipeline.drawcalls[0].add_random(&mut self.lulz);
         total_instances
     }
 
@@ -750,7 +776,6 @@ impl QuadPipeline {
         let projection = ortho_mat(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0);
         let projection_location = gl
             .get_uniform_location(shader.program, "projection")
-            //.get_uniform_location(shader.program, "tex")
             .unwrap();
         Self {
             drawcalls: vec![],
@@ -866,7 +891,6 @@ impl TextureRenderTarget {
 }
 
 /// The options for what a render pass can write to.
-///
 pub enum RenderTarget {
     Texture(TextureRenderTarget),
     Screen,
@@ -894,14 +918,6 @@ impl RenderTarget {
         };
         gl.bind_framebuffer(glow::FRAMEBUFFER, fb);
     }
-
-    /// Get the texture this render target outputs to, if any.
-    fn get_texture(&self) -> Option<SharedTexture> {
-        match self {
-            Self::Screen => None,
-            Self::Texture(trt) => Some(trt.output_texture.clone()),
-        }
-    }
 }
 
 /// Currently, no input framebuffers or such.
@@ -912,26 +928,22 @@ impl RenderTarget {
 pub struct RenderPass {
     target: RenderTarget,
     pipelines: Vec<QuadPipeline>,
-    final_pipeline: QuadPipeline,
 }
 
 impl RenderPass {
     unsafe fn new(ctx: &mut GlContext, width: usize, height: usize) -> Self {
         let target = RenderTarget::new_target(ctx, width, height);
 
-        let mut final_pipeline = QuadPipeline::new(&ctx, GlContext::default_shader(ctx));
-        let drawcall = QuadDrawCall::new(
-            ctx,
-            target.get_texture().unwrap(),
-            SamplerSpec::default(),
-            &final_pipeline.shader,
-        );
-        final_pipeline.drawcalls.push(drawcall);
-
         Self {
             target,
             pipelines: vec![],
-            final_pipeline,
+        }
+    }
+
+    unsafe fn new_screen(_ctx: &mut GlContext, _width: usize, _height: usize) -> Self {
+        Self {
+            target: RenderTarget::Screen,
+            pipelines: vec![],
         }
     }
 
@@ -940,8 +952,13 @@ impl RenderPass {
         for pipeline in self.pipelines.iter_mut() {
             pipeline.draw(gl);
         }
-        // Draw to the screen
-        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        self.final_pipeline.draw(gl);
+    }
+
+    /// Get the texture this render pass outputs to, if any.
+    fn get_texture(&self) -> Option<SharedTexture> {
+        match &self.target {
+            RenderTarget::Screen => None,
+            RenderTarget::Texture(trt) => Some(trt.output_texture.clone()),
+        }
     }
 }
