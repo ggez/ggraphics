@@ -910,109 +910,15 @@ impl RenderTarget {
 ///
 /// TODO: Clear color should be part of this.
 pub struct RenderPass {
-    ctx: Rc<glow::Context>,
     target: RenderTarget,
-    /*
-    output_framebuffer: GlFramebuffer,
-    _output_texture: SharedTexture,
-    /// This may be a texture or a render buffer, if we don't need to sample
-    /// from it we can use a render buffer.  For now, for simplicity, we use
-    /// a texture.
-    _output_depthbuffer: GlRenderbuffer,
-    */
     pipelines: Vec<QuadPipeline>,
     final_pipeline: QuadPipeline,
 }
 
-impl Drop for RenderPass {
-    fn drop(&mut self) {
-        /*
-        unsafe {
-            self.ctx.delete_framebuffer(self.output_framebuffer);
-            // TODO: We viciously leak the depth buffer for now.  cruel!
-        }
-        */
-    }
-}
-
 impl RenderPass {
     unsafe fn new(ctx: &mut GlContext, width: usize, height: usize) -> Self {
-        /*
-        let gl = &*ctx.gl;
-        let t =
-            Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height).into_shared();
-        // TODO: Is this the right format?  Newp.  What is?
-        /*
-        let depth = Texture::new_empty(
-            ctx,
-            glow::DEPTH_COMPONENT16,
-            glow::UNSIGNED_SHORT,
-            width,
-            height,
-        );
-        */
-        let depth = gl.create_renderbuffer().unwrap();
-        let fb = gl.create_framebuffer().unwrap();
-        // Now we have our color texture, depth buffer and framebuffer, and we
-        // glue them all together.
-        {
-            gl.bind_texture(glow::TEXTURE_2D, Some(t.tex));
-            // We need to add filtering params to the texture, for Reasons.
-            // We might be able to use samplers instead, but not yet.
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MAG_FILTER,
-                glow::NEAREST as i32,
-            );
-            gl.tex_parameter_i32(
-                glow::TEXTURE_2D,
-                glow::TEXTURE_MIN_FILTER,
-                glow::NEAREST as i32,
-            );
-
-            /*
-            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
-            gl.renderbuffer_storage(
-                glow::RENDERBUFFER,
-                glow::DEPTH_COMPONENT,
-                width as i32,
-                height as i32,
-            );
-            */
-
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
-            gl.framebuffer_texture_2d(
-                glow::FRAMEBUFFER,
-                glow::COLOR_ATTACHMENT0,
-                glow::TEXTURE_2D,
-                Some(t.tex),
-                0,
-            );
-            /*
-            gl.framebuffer_renderbuffer(
-                glow::FRAMEBUFFER,
-                glow::DEPTH_ATTACHMENT,
-                glow::RENDERBUFFER,
-                Some(depth),
-            );
-            */
-
-            // Set list of draw buffers
-            let draw_buffers = &[glow::COLOR_ATTACHMENT0];
-            gl.draw_buffers(draw_buffers);
-
-            // Verify results
-            if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
-                panic!("Framebuffer hecked up");
-            }
-
-            // Reset heckin bindings
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            gl.bind_texture(glow::TEXTURE_2D, None);
-        }
-        */
-
         let target = RenderTarget::new_target(ctx, width, height);
+
         let mut final_pipeline = QuadPipeline::new(&ctx, GlContext::default_shader(ctx));
         let drawcall = QuadDrawCall::new(
             ctx,
@@ -1024,12 +930,6 @@ impl RenderPass {
 
         Self {
             target,
-            ctx: ctx.gl.clone(),
-            /*
-            output_framebuffer: fb,
-            _output_texture: t,
-            _output_depthbuffer: depth,
-            */
             pipelines: vec![],
             final_pipeline,
         }
