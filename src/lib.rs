@@ -1,1177 +1,456 @@
-/*
-Okay... one way or another I have a list of per-rect properties, like position. All rects in that list are drawn with the same texture and geometry, however that geometry is specified. Then I have another list of (texture, rect list) pairs. And that gets me batched drawing in a form that's easy to make automatic.
+// Suggested logging level for debugging:
+// env RUST_LOG=info cargo run
+//
+// Next up: Render passes
+// Better shader setup, multiple pipelines
+// Clear color -- start refactoring it into an actual lib
+// Make actual projection and stuff.
+// Try out triangle strips?  idk, vertices don't seem much a bottleneck.
+// Resize viewport properly
 
-THEN I have one or more frames in flight, and each frame in flight has its own copies of the things necessary to actually draw that frame: uniforms/push constants, descriptor set, and the GPU buffers containing the list of (texture, rect list) pairs
-
-To actually draw, you grab the appropriate free frame-in-flight, copy your (texture, rect list) pairs into its buffers, and for each pair issue one draw call to draw that chunk of the buffer.
-*/
-
-/*
-Okay, so the first step is going to be rendering multiple things with the same
-geometry and texture using instanced drawing.  DONE.
-
-Next step is to render things with different textures.  DONE.
-
-Last step is to render things with different textures and
-different geometry.  Trivial to do currently but it would be nice
-to not re-bind the mesh descriptor if we don't have to...
-How much does that actually matter though?  Dunno.
-DONE.
-
-Time to clean up and refactor!
-
-Last+1 step is going to be having multiple pipelines with
-different shaders.
-
-Last+2 step might be to make rendering quads a more efficient special case,
-for example by reifying the geometry in the vertex shader a la the Rendy
-quads example.  This might also be where we try to reduce
-descriptor swaps if possible.
-
-Then actual last step will be to have multiple render passes with different
-render targets.
-*/
-
-/*
-
-use std::io;
+use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::mem;
-use std::sync::Arc;
+use std::time::Duration;
 
-use rendy::command::{QueueId, RenderPassEncoder};
-use rendy::factory::{Factory, ImageState};
-use rendy::graph::{render::*, GraphContext, NodeBuffer, NodeImage};
-use rendy::hal;
-use rendy::hal::Device as _;
-use rendy::memory::Dynamic;
-use rendy::mesh::{AsVertex, Mesh, PosColorNorm};
-use rendy::resource::{
-    Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Filter, Handle, SamplerInfo,
-    WrapMode,
-};
-use rendy::texture::Texture;
-use rendy::wsi::winit;
+use bytemuck;
+use glam::Mat4;
+use glow::*;
+use image;
+use log::*;
 
-use euclid;
-use oorandom;
+// Shortcuts for various OpenGL types.
 
-pub type Point2 = euclid::Point2D<f32, euclid::UnknownUnit>;
-pub type Transform3 = euclid::Transform3D<f32, euclid::UnknownUnit, euclid::UnknownUnit>;
-pub type Rect = euclid::Rect<f32, euclid::UnknownUnit>;
+type GlTexture = <Context as glow::HasContext>::Texture;
+type GlSampler = <Context as glow::HasContext>::Sampler;
+type GlProgram = <Context as glow::HasContext>::Program;
+type GlVertexArray = <Context as glow::HasContext>::VertexArray;
+type GlFramebuffer = <Context as glow::HasContext>::Framebuffer;
+type GlRenderbuffer = <Context as glow::HasContext>::Renderbuffer;
+type GlBuffer = <Context as glow::HasContext>::Buffer;
+type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
 
-pub mod quad;
+/// TODO: Figure out what to do with this, and whether it can work on wasm.
+/// For now though, Rc is fine.
+type Rc<T> = std::rc::Rc<T>;
+//type Rc<T> = std::sync::Arc<T>;
 
-// TODO: Think a bit better about how to do this.  Can we set it or specialize it at runtime perhaps?
-// Perhaps.
-// For now though, this is okay if not great.
-// It WOULD be quite nice to be able to play with OpenGL and DX12 backends.
-//
-// TODO: We ALSO need to specify features to rendy to build these, so this doesn't even work currently.
-// For now we only ever specify Vulkan.
-//
-// Rendy doesn't currently work on gfx-rs's DX12 backend though, and the OpenGL backend
-// is still WIP, so...  I guess this is what we get.
+/// A type that contains all the STUFF we need for displaying graphics
+/// and handling events on both desktop and web.
+/// Anything it contains is specialized to the correct type via cfg flags
+/// at compile time, rather than trying to use generics or such.
+pub struct GlContext {
+    gl: Rc<glow::Context>,
+    //pipelines: Vec<QuadPipeline>,
+    passes: Vec<RenderPass>,
+    /// Samplers are cached and managed entirely by the GlContext.
+    /// You usually only need a few of them so there's no point freeing
+    /// them separately, you just ask for the one you want and it gives
+    /// it to you.
+    samplers: HashMap<SamplerSpec, GlSampler>,
+    shader_version: String,
 
-/// Data we need per instance.  DrawParam gets turned into this.
-/// We have to be *quite particular* about layout since this gets
-/// fed straight to the shader.
-///
-/// TODO: Currently the shader doesn't use src or color though.
-#[repr(C, align(16))]
-#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
-pub struct InstanceData {
-    // The euclid types don't impl PartialOrd and PartialEq so
-    // we have to use the lower-level forms for
-    // actually sending to the GPU.  :-/
-    transform: [f32; 16],
-    src: [f32; 4],
-    color: [f32; 4],
+    lulz: oorandom::Rand32,
 }
 
-use rendy::mesh::{Attribute, VertexFormat};
+fn ortho(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> [[f32; 4]; 4] {
+    let c0r0 = 2.0 / (right - left);
+    let c0r1 = 0.0;
+    let c0r2 = 0.0;
+    let c0r3 = 0.0;
 
-/// Okay, this tripped me up.  Instance data is technically
-/// part of the per-vertex data.  So we describe it as
-/// part of the vertex format.  This is where that
-/// definition happens.
-///
-/// This trait impl is basically extended from the impl for
-/// `rendy::mesh::Transform`
-impl AsVertex for InstanceData {
-    fn vertex() -> VertexFormat {
-        VertexFormat {
-            attributes: vec![
-                Attribute::new(
-                    "Transform1",
-                    0,
-                    hal::pso::Element {
-                        format: hal::format::Format::Rgba32Sfloat,
-                        offset: 0,
-                    },
-                ),
-                Attribute::new(
-                    "Transform2",
-                    1,
-                    hal::pso::Element {
-                        format: hal::format::Format::Rgba32Sfloat,
-                        offset: 16,
-                    },
-                ),
-                Attribute::new(
-                    "Transform3",
-                    0,
-                    hal::pso::Element {
-                        format: hal::format::Format::Rgba32Sfloat,
-                        offset: 32,
-                    },
-                ),
-                Attribute::new(
-                    "Transform4",
-                    0,
-                    hal::pso::Element {
-                        format: hal::format::Format::Rgba32Sfloat,
-                        offset: 48,
-                    },
-                ),
-                // rect
-                Attribute::new(
-                    "rect",
-                    0,
-                    hal::pso::Element {
-                        format: hal::format::Format::Rgba32Sfloat,
-                        offset: 64,
-                    },
-                ),
-                // color
-                Attribute::new(
-                    "color",
-                    0,
-                    hal::pso::Element {
-                        format: hal::format::Format::Rgba32Sfloat,
-                        offset: 80,
-                    },
-                ),
-            ],
-            stride: 96,
-        }
-    }
+    let c1r0 = 0.0;
+    let c1r1 = 2.0 / (top - bottom);
+    let c1r2 = 0.0;
+    let c1r3 = 0.0;
+
+    let c2r0 = 0.0;
+    let c2r1 = 0.0;
+    let c2r2 = -2.0 / (far - near);
+    let c2r3 = 0.0;
+
+    let c3r0 = -(right + left) / (right - left);
+    let c3r1 = -(top + bottom) / (top - bottom);
+    let c3r2 = -(far + near) / (far - near);
+    let c3r3 = 1.0;
+
+    // our matrices are column-major, so here we are.
+    [
+        [c0r0, c0r1, c0r2, c0r3],
+        [c1r0, c1r1, c1r2, c1r3],
+        [c2r0, c2r1, c2r2, c2r3],
+        [c3r0, c3r1, c3r2, c3r3],
+    ]
 }
 
-/// Uniform data.  Each frame contains one of these.
-#[derive(Clone, Copy, Debug, Default)]
-#[repr(C, align(16))]
-pub struct UniformData {
-    pub proj: Transform3,
-    pub view: Transform3,
+fn ortho_mat(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> Mat4 {
+    Mat4::from_cols_array_2d(&ortho(left, right, top, bottom, far, near))
 }
 
-/// An instance buffer that bounds checks how many instances you can
-/// put into it.  Is not generic on the instance data type, just holds
-/// `InstanceData`.
-/// TODO: Make it resizeable someday.
-///
-/// The buffer in a `FrameInFlight`.
-///
-/// We pack data from multiple `DrawCall`'s together into one `Buffer`
-/// but each draw call can have a varying amount of instance data,
-/// so we end up with something like:
-///
-/// ```
-/// | Instances1 ... | Instances2 ... | ... | empty space |
-/// ```
-///
-/// Right now we have a fixed size buffer and just limit the number
-/// of objects in it.  TODO: Eventually someday we will grow the buffer
-/// as needed.  Maybe shrink it too?  Not sure about that.
-#[derive(Debug)]
-pub struct InstanceBuffer<B>
-where
-    B: hal::Backend,
-{
-    /// Capacity, in *number of instances*.
-    pub capacity: u64,
-    /// Number of instances currently in the buffer
-    pub length: u64,
-    /// Actual buffer object.
-    pub buffer: Escape<Buffer<B>>,
-}
+impl GlContext {
+    fn default_shader(ctx: &GlContext) -> Shader {
+        let vertex_shader_source = r#"const vec2 verts[6] = vec2[6](
+                vec2(0.0f, 0.0f),
+                vec2(1.0f, 1.0f),
+                vec2(0.0f, 1.0f),
 
-impl<B> InstanceBuffer<B>
-where
-    B: hal::Backend,
-{
-    /// Create a new empty instance buffer with the given
-    /// capacity in *number of instances*
-    pub fn new(capacity: u64, factory: &Factory<B>) -> Self {
-        let bytes_per_instance = Self::instance_size();
-        let buffer_size = capacity * bytes_per_instance;
-        let buffer = factory
-            .create_buffer(
-                BufferInfo {
-                    size: buffer_size,
-                    // TODO: We probably don't need usage::Uniform here anymore.  Confirm!
-                    usage: hal::buffer::Usage::UNIFORM | hal::buffer::Usage::VERTEX,
-                },
-                Dynamic,
-            )
-            .unwrap();
-        Self {
-            capacity,
-            length: 0,
-            buffer,
-        }
+                vec2(0.0f, 0.0f),
+                vec2(1.0f, 0.0f),
+                vec2(1.0f, 1.0f)
+            );
+            const vec2 uvs[6] = vec2[6](
+                vec2(0.0f, 1.0f),
+                vec2(1.0f, 0.0f),
+                vec2(0.0f, 0.0f),
+
+                vec2(0.0f, 1.0f),
+                vec2(1.0f, 1.0f),
+                vec2(1.0f, 0.0f)
+            );
+
+            // TODO: We don't actually need layouts here, hmmm.
+            // Not sure how we want to define these.
+
+            // Gotta actually use this dummy value or else it'll get
+            // optimized out and we'll fail to look it up later.
+            layout(location = 0) in vec2 vertex_dummy;
+            layout(location = 1) in vec4 model_color;
+            layout(location = 2) in vec2 model_offset;
+            layout(location = 3) in vec2 model_scale;
+            layout(location = 4) in vec4 model_src_rect;
+            layout(location = 5) in float model_rotation;
+            uniform mat4 projection;
+
+            out vec2 vert;
+            out vec2 tex_coord;
+            out vec4 frag_color;
+
+            void main() {
+                vert = verts[gl_VertexID % 6] * model_scale + vertex_dummy * model_rotation + model_offset;
+                // TODO: Double-check these UV's are correct
+                tex_coord = uvs[gl_VertexID] * model_src_rect.zw + model_src_rect.xy;
+                frag_color = model_color;
+                gl_Position = vec4(vert, 0.0, 1.0) * projection;
+            }"#;
+        let fragment_shader_source = r#"precision mediump float;
+            in vec2 vert;
+            in vec2 tex_coord;
+            in vec4 frag_color;
+            uniform sampler2D tex;
+
+            layout(location=0) out vec4 color;
+
+            void main() {
+                // Useful for looking at UV values
+                //color = vec4(tex_coord, 0.5, 1.0);
+
+                color = texture(tex, tex_coord) * frag_color;
+            }"#;
+        Shader::new(
+            &ctx,
+            vertex_shader_source,
+            fragment_shader_source,
+            &ctx.shader_version,
+        )
     }
 
-    /// Resizes the underlying buffer.  Does NOT copy the contents
-    /// of the old buffer (yet), new buffer is empty.
-    pub fn resize(&mut self, factory: &Factory<B>, new_capacity: u64) {
-        let buffer = factory
-            .create_buffer(
-                BufferInfo {
-                    size: new_capacity,
-                    // TODO: We probably don't need usage::Uniform here anymore.  Confirm!
-                    usage: hal::buffer::Usage::UNIFORM | hal::buffer::Usage::VERTEX,
-                },
-                Dynamic,
-            )
-            .unwrap();
-        let old_buffer = mem::replace(&mut self.buffer, buffer);
+    pub fn new(gl: glow::Context, shader_version: &str) -> Self {
+        // GL SETUP
         unsafe {
-            factory.destroy_relevant_buffer(Escape::unescape(old_buffer));
-        }
-        self.length = 0;
-        self.capacity = new_capacity;
-    }
-
-    /// Returns the size in bytes of a single instance for this type.
-    /// For now, this doesn't change, but it's convenient to have.
-    ///
-    /// This can't be a const fn yet, 'cause trait bounds.
-    /// See https://github.com/rust-lang/rust/issues/57563
-    pub fn instance_size() -> u64 {
-        mem::size_of::<InstanceData>() as u64
-    }
-
-    /// Returns the buffer size in bytes, rounded up
-    /// to the given alignment.
-    /// TODO: Are the alignment requirements for this necessary?
-    pub fn buffer_size(&self, align: u64) -> u64 {
-        (((Self::instance_size() * self.capacity) - 1) / align + 1) * align
-    }
-
-    /// Returns an offset in bytes, pointing to free space right after
-    /// the given number of instances, or None if `idx >= self.capacity`
-    pub fn instance_offset(&self, idx: u64) -> Option<u64> {
-        if idx >= self.capacity {
-            None
-        } else {
-            Some(idx * Self::instance_size())
-        }
-    }
-
-    /// Empties the buffer by setting the length to 0.
-    /// Capacity remains unchanged.
-    pub fn clear(&mut self) {
-        self.length = 0;
-    }
-
-    /// Copies the instance data in the given slice into the buffer,
-    /// starting from the current end of it.
-    /// Returns the offset at which it started if ok, or if the buffer
-    /// is not large enough returns Err.
-    ///
-    /// TODO: Better error types.  Do bounds checks with assert_dbg!()?
-    pub fn add_slice(
-        &mut self,
-        factory: &Factory<B>,
-        instances: &[InstanceData],
-    ) -> Result<u64, ()> {
-        if self.length + (instances.len() as u64) >= self.capacity {
-            return Err(());
-        }
-        let offset = self.instance_offset(self.length).ok_or(())?;
-        // Vulkan doesn't seem to like zero-size copies very much.
-        if instances.len() > 0 {
-            unsafe {
-                factory
-                    .upload_visible_buffer(&mut self.buffer, offset, instances)
-                    .unwrap();
-            }
-            self.length += instances.len() as u64;
-        }
-        Ok(self.length)
-    }
-
-    pub fn inner(&self) -> &Buffer<B> {
-        &self.buffer
-    }
-
-    pub fn inner_mut(&mut self) -> &mut Buffer<B> {
-        &mut self.buffer
-    }
-}
-
-/// What data we need for each frame in flight.
-/// Rendy doesn't do any synchronization for us
-/// beyond guarenteeing that when we get a new frame
-/// index everything touched by that frame index is
-/// now free to reuse.  So we just make one entire
-/// set of data per frame.
-///
-/// We could make different frames share buffers
-/// and descriptor sets and such and only change bits
-/// that aren't in use from other frames, but that's
-/// more complex than I want to get into right now.
-///
-/// When we do want to do that though, I think the simple
-/// way would be... maybe create a structure through which
-/// a FrameInFlight can be altered and which records if
-/// things have actually changed.  Actually, the DrawCall
-/// might the place to handle that?  Hm, having a separate
-/// Buffer per draw call might be the way to go too?  If
-/// the buffer does not change from one draw call to the
-/// next, we don't need to re-record its data, just issue
-/// the draw call directly with the right PrepareReuse...
-/// idk, I'm rambling.
-#[derive(Debug)]
-struct FrameInFlight<B>
-where
-    B: hal::Backend,
-{
-    /// The buffer where we store instance data.
-    buffer: InstanceBuffer<B>,
-    /// One descriptor set per draw call we do.
-    /// Also has the number of instances in that draw call,
-    /// so we can find offsets.
-    descriptor_sets: Vec<Escape<DescriptorSet<B>>>,
-    /// The frame's local copy of uniform data.
-    push_constants: [u32; 32],
-}
-
-impl<B> FrameInFlight<B>
-where
-    B: hal::Backend,
-{
-    /// All our descriptor sets use the same layout.
-    /// This one!  We have an instance buffer, an
-    /// image, and a sampler.
-    const LAYOUT: &'static [hal::pso::DescriptorSetLayoutBinding] = &[
-        // TODO: Can we get rid of this uniform buffer since we use push constants?
-        // Doesn't look like it, 'cause we use the buffer for our instance data too.
-        hal::pso::DescriptorSetLayoutBinding {
-            binding: 0,
-            ty: hal::pso::DescriptorType::UniformBuffer,
-            count: 1,
-            stage_flags: hal::pso::ShaderStageFlags::GRAPHICS,
-            immutable_samplers: false,
-        },
-        hal::pso::DescriptorSetLayoutBinding {
-            binding: 1,
-            ty: hal::pso::DescriptorType::SampledImage,
-            count: 1,
-            stage_flags: hal::pso::ShaderStageFlags::FRAGMENT,
-            immutable_samplers: false,
-        },
-        hal::pso::DescriptorSetLayoutBinding {
-            binding: 2,
-            ty: hal::pso::DescriptorType::Sampler,
-            count: 1,
-            stage_flags: hal::pso::ShaderStageFlags::FRAGMENT,
-            immutable_samplers: false,
-        },
-    ];
-    fn get_descriptor_set_layout() -> SetLayout {
-        SetLayout {
-            bindings: Self::LAYOUT.to_vec(),
-        }
-    }
-
-    fn new(
-        factory: &mut Factory<B>,
-        align: u64,
-        draw_calls: &[DrawCall<B>],
-        descriptor_set: &Handle<DescriptorSetLayout<B>>,
-    ) -> Self {
-        use std::convert::TryInto;
-        let buffer_count = MAX_OBJECTS * draw_calls.len();
-        let buffer = InstanceBuffer::new(buffer_count.try_into().unwrap(), factory);
-        let descriptor_sets = vec![];
-        let mut ret = Self {
-            buffer,
-            descriptor_sets,
-            push_constants: [0; 32],
-        };
-        for draw_call in draw_calls {
-            // all descriptor sets use the same layout
-            // we need one per draw call, per frame in flight.
-            ret.create_descriptor_sets(factory, draw_call, descriptor_set, align);
-        }
-        ret
-    }
-
-    /// Takes a draw call and creates a descriptor set that points
-    /// at its resources.
-    ///
-    /// For now we do not care about preserving descriptor sets between draw calls.
-    fn create_descriptor_sets(
-        &mut self,
-        factory: &Factory<B>,
-        draw_call: &DrawCall<B>,
-        layout: &Handle<DescriptorSetLayout<B>>,
-        _align: u64,
-    ) {
-        // Does this sampler need to stay alive?  We pass a
-        // reference to it elsewhere in an `unsafe` block...
-        // It's cached in the Factory anyway, so I don't think so.
-        let sampler = factory
-            .get_sampler(draw_call.sampler_info.clone())
-            .expect("Could not get sampler");
-
-        unsafe {
-            let set = factory.create_descriptor_set(layout.clone()).unwrap();
-            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
-                set: set.raw(),
-                binding: 1,
-                array_offset: 0,
-                descriptors: vec![hal::pso::Descriptor::Image(
-                    draw_call.texture.view().raw(),
-                    hal::image::Layout::ShaderReadOnlyOptimal,
-                )],
-            }));
-            factory.write_descriptor_sets(Some(hal::pso::DescriptorSetWrite {
-                set: set.raw(),
-                binding: 2,
-                array_offset: 0,
-                descriptors: vec![hal::pso::Descriptor::Sampler(sampler.raw())],
-            }));
-            self.descriptor_sets.push(set);
-        }
-    }
-
-    /// This happens before a frame; it should take a LIST of draw calls and take
-    /// care of uploading EACH of them into the buffer so they don't clash!
-    fn prepare(
-        &mut self,
-        factory: &Factory<B>,
-        uniforms: &UniformData,
-        draw_calls: &[DrawCall<B>],
-        _layout: &Handle<DescriptorSetLayout<B>>,
-        _align: u64,
-    ) {
-        assert!(draw_calls.len() > 0);
-        // Store the uniforms to be shoved into push constants this frame
-        // TODO: Be less crude about indexing and such.
-        for (i, vl) in uniforms.proj.to_row_major_array().into_iter().enumerate() {
-            self.push_constants[i] = vl.to_bits();
-        }
-        for (i, vl) in uniforms.view.to_row_major_array().into_iter().enumerate() {
-            self.push_constants[16 + i] = vl.to_bits();
-        }
-
-        //println!("Preparing frame-in-flight, {} draw calls, first has {} instances.", draw_calls.len(),
-        //draw_calls[0].objects.len());
-        self.buffer.clear();
-        for draw_call in draw_calls {
-            let _offset = self
-                .buffer
-                .add_slice(factory, &draw_call.objects[..])
-                .unwrap();
-        }
-    }
-
-    /// Draws a list of DrawCall's.
-    fn draw(
-        &mut self,
-        draw_calls: &[DrawCall<B>],
-        layout: &B::PipelineLayout,
-        encoder: &mut RenderPassEncoder<'_, B>,
-        _align: u64,
-    ) {
-        //println!("Drawing {} draw calls", draw_calls.len());
-        let mut instance_count: u64 = 0;
-        for (draw_call, descriptor_set) in draw_calls.iter().zip(&self.descriptor_sets) {
-            //println!("Drawing {:#?}, {:#?}, {}", draw_call, descriptor_set, draw_offset);
-
-            // This is a bit weird, but basically tells the thing where to find the
-            // instance data.  The stride and such of the instance structure is
-            // defined in the `AsVertex` definition.
-            unsafe {
-                encoder.bind_graphics_descriptor_sets(
-                    layout,
-                    0,
-                    std::iter::once(descriptor_set.raw()),
-                    std::iter::empty(),
-                );
-            }
-            draw_call
-                .mesh
-                .as_ref()
-                .bind(0, &[PosColorNorm::vertex()], encoder)
-                .expect("Could not bind mesh?");
-            // The 1 here is because this is the second vertex buffer we've bound;
-            // the first is bound to the Mesh.
-            unsafe {
-                encoder.bind_vertex_buffers(
-                    1,
-                    std::iter::once((
-                        self.buffer.inner().raw(),
-                        self.buffer.instance_offset(instance_count).unwrap(),
-                    )),
-                );
-            }
-            unsafe {
-                encoder.push_constants(
-                    layout,
-                    hal::pso::ShaderStageFlags::ALL,
-                    0,
-                    &self.push_constants,
-                );
-            }
-            // The length of the mesh is the number of indices if it has any, the number
-            // of verts otherwise.  See https://github.com/amethyst/rendy/issues/119
-            let indices = 0..(draw_call.mesh.len() as u32);
-            // This count is the *number of instances*.  What instance
-            // to start at in the buffer is defined by the offset in
-            // `bind_vertex_buffers()` above, and the stride/size of an instance
-            // is defined in `AsVertex`.
-            let instances = 0..(draw_call.objects.len() as u32);
-            unsafe {
-                encoder.draw_indexed(indices, 0, instances);
-            }
-            instance_count += draw_call.objects.len() as u64;
-        }
-    }
-}
-
-/// The data we need for a single draw call, which
-/// gets bound to descriptor sets and
-///
-/// For now we re-bind EVERYTHING even if only certain
-/// resources have changed (for example, texture changes
-/// and mesh stays the same).  Should be easy to check
-/// that in the future and make the various things
-/// in here `Option`s.
-#[derive(Debug)]
-pub struct DrawCall<B>
-where
-    B: hal::Backend,
-{
-    objects: Vec<InstanceData>,
-    mesh: Arc<Mesh<B>>,
-    texture: Arc<Texture<B>>,
-    /// We just need the actual config for the sampler 'cause
-    /// Rendy's `Factory` can manage a sampler cache itself.
-    sampler_info: SamplerInfo,
-}
-
-impl<B> DrawCall<B>
-where
-    B: hal::Backend,
-{
-    pub fn new(texture: Arc<Texture<B>>, mesh: Arc<Mesh<B>>) -> Self {
-        let sampler_info = SamplerInfo::new(Filter::Nearest, WrapMode::Clamp);
-        Self {
-            objects: vec![],
-            mesh,
-            texture,
-            sampler_info,
-        }
-    }
-
-    pub fn add_object(&mut self, rng: &mut oorandom::Rand32, max_width: f32, max_height: f32) {
-        if self.objects.len() < MAX_OBJECTS {
-            let x = rng.rand_float() * max_width;
-            let y = rng.rand_float() * max_height;
-            //println!("Adding object at {}x{}", x, y);
-            let transform = Transform3::create_translation(x, y, -100.0);
-            let src = Rect::from(euclid::Size2D::new(1.0, 1.0));
-            let color = [1.0, 0.0, 1.0, 1.0];
-            let instance = InstanceData {
-                transform: transform.to_row_major_array(),
-                src: [src.origin.x, src.origin.y, src.size.width, src.size.height],
-                color,
+            gl.clear_color(0.1, 0.2, 0.3, 1.0);
+            gl.enable(glow::BLEND);
+            gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            let lulz = oorandom::Rand32::new(314159);
+            let mut s = GlContext {
+                gl: Rc::new(gl),
+                //pipelines: vec![],
+                passes: vec![],
+                samplers: HashMap::new(),
+                shader_version: shader_version.to_string(),
+                lulz,
             };
-            self.objects.push(instance);
+            s.register_debug_callback();
+            let mut pass = RenderPass::new(&mut s, 800, 600);
+            let shader = Self::default_shader(&s);
+            let mut pipeline = QuadPipeline::new(&s, shader);
+            let texture = {
+                let image_bytes = include_bytes!("data/wabbit_alpha.png");
+                let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
+                let (w, h) = image_rgba.dimensions();
+                let image_rgba_bytes = image_rgba.into_raw();
+                //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
+                Texture::new(&s, &image_rgba_bytes, w as usize, h as usize).into_shared()
+            };
+            let drawcall =
+                QuadDrawCall::new(&mut s, texture, SamplerSpec::default(), &pipeline.shader);
+            pipeline.drawcalls.push(drawcall);
+            pass.pipelines.push(pipeline);
+            s.passes.push(pass);
+            //s.pipelines.push(pipeline);
+            s
+        }
+    }
+
+    /// Log OpenGL errors as possible.
+    /// TODO: Figure out why this panics on wasm
+    fn register_debug_callback(&self) {
+        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+        unsafe {
+            self.gl
+                .debug_message_callback(|source, typ, id, severity, message| {
+                    // The ordering of severities is basically awful, best to
+                    // not even try and just match them manually.
+                    match severity {
+                        glow::DEBUG_SEVERITY_HIGH => {
+                            error!(
+                                "GL error type {} id {} from {}: {}",
+                                typ, id, source, message
+                            );
+                        }
+                        glow::DEBUG_SEVERITY_MEDIUM => {
+                            warn!(
+                                "GL error type {} id {} from {}: {}",
+                                typ, id, source, message
+                            );
+                        }
+                        glow::DEBUG_SEVERITY_LOW => {
+                            info!(
+                                "GL error type {} id {} from {}: {}",
+                                typ, id, source, message
+                            );
+                        }
+                        glow::DEBUG_SEVERITY_NOTIFICATION => (),
+                        _ => (),
+                    }
+                });
+        }
+    }
+
+    pub fn get_sampler(&mut self, spec: &SamplerSpec) -> GlSampler {
+        let gl = &*self.gl;
+        // TODO: Audit unsafe
+        *self.samplers.entry(*spec).or_insert_with(|| unsafe {
+            let sampler = gl.create_sampler().unwrap();
+            gl.sampler_parameter_i32(
+                sampler,
+                glow::TEXTURE_MIN_FILTER,
+                spec.min_filter.to_gl() as i32,
+            );
+            gl.sampler_parameter_i32(
+                sampler,
+                glow::TEXTURE_MAG_FILTER,
+                spec.mag_filter.to_gl() as i32,
+            );
+            gl.sampler_parameter_i32(sampler, glow::TEXTURE_WRAP_S, spec.wrap.to_gl() as i32);
+            gl.sampler_parameter_i32(sampler, glow::TEXTURE_WRAP_T, spec.wrap.to_gl() as i32);
+            sampler
+        })
+    }
+
+    pub fn draw(&mut self) {
+        // This will be safe if pipeline.draw() is
+        unsafe {
+            self.gl
+                .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+            for pass in self.passes.iter_mut() {
+                pass.draw(&self.gl);
+            }
+        }
+    }
+
+    pub fn update(&mut self, frametime: Duration) -> usize {
+        // This adds more quads as long as our frame doesn't take too long
+        // We max out at 17 ms per frame; this method of measurement
+        // is pretty imprecise and there will be jitter, but it should
+        // be okay for order-of-magnitude.
+        let mut total_instances = 0;
+        if frametime.as_secs_f64() < 0.017 {
+            for pass in self.passes.iter_mut() {
+                for pipeline in pass.pipelines.iter_mut() {
+                    for drawcall in pipeline.drawcalls.iter_mut() {
+                        for _ in 0..1 {
+                            drawcall.add_random(&mut self.lulz);
+                        }
+                        total_instances += drawcall.instances.len();
+                    }
+                }
+            }
+        }
+        self.passes[0].final_pipeline.drawcalls[0].add_random(&mut self.lulz);
+        total_instances
+    }
+
+    /// Returns OpenGL version info.
+    /// Vendor, renderer, GL version, GLSL version
+    pub fn get_info(&self) -> (String, String, String, String) {
+        unsafe {
+            let vendor = self.gl.get_parameter_string(glow::VENDOR);
+            let rend = self.gl.get_parameter_string(glow::RENDERER);
+            let vers = self.gl.get_parameter_string(glow::VERSION);
+            let glsl_vers = self.gl.get_parameter_string(glow::SHADING_LANGUAGE_VERSION);
+
+            (vendor, rend, vers, glsl_vers)
         }
     }
 }
 
+/// TODO: This is actually not safe to Clone, we'd have to Rc the GlTexture.
+/// Which is fine, but then inconvenient for other things maybe.
+/// Think about it.
 #[derive(Debug)]
-pub struct Aux<B: hal::Backend> {
-    pub frames: usize,
-    pub align: u64,
-
-    pub draws: Vec<DrawCall<B>>,
-    pub camera: UniformData,
-
-    pub shader: rendy::shader::ShaderSetBuilder,
+pub struct Texture {
+    ctx: Rc<glow::Context>,
+    tex: GlTexture,
 }
 
-const MAX_OBJECTS: usize = 10_000;
+pub type SharedTexture = Rc<Texture>;
 
-/// Render group that consist of simple graphics pipeline.
-#[derive(Debug)]
-pub struct MeshRenderGroup<B>
-where
-    B: hal::Backend,
-{
-    set_layouts: Vec<Handle<DescriptorSetLayout<B>>>,
-    pipeline_layout: B::PipelineLayout,
-    graphics_pipeline: B::GraphicsPipeline,
-    frames_in_flight: Vec<FrameInFlight<B>>,
+impl Drop for Texture {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_texture(self.tex);
+        }
+    }
 }
 
-/// Descriptor for simple render group.
-#[derive(Debug)]
-pub struct MeshRenderGroupDesc {
-    // inner: MeshRenderPipelineDesc,
-    colors: Vec<hal::pso::ColorBlendDesc>,
-}
+impl Texture {
+    pub fn new(ctx: &GlContext, rgba: &[u8], width: usize, height: usize) -> Self {
+        assert_eq!(width * height * 4, rgba.len());
+        let gl = &*ctx.gl;
+        // Unsafety: This verifies size of user input, checks resource
+        // creation, and does no raw pointer-manipulation-y things outside
+        // of that.
+        unsafe {
+            let t = gl.create_texture().unwrap();
+            gl.active_texture(glow::TEXTURE0);
+            gl.bind_texture(glow::TEXTURE_2D, Some(t));
+            gl.tex_image_2d(
+                glow::TEXTURE_2D,                   // Texture target
+                0,                                  // mipmap level
+                i32::try_from(glow::RGBA).unwrap(), // format to store the texture in (can't fail)
+                i32::try_from(width).unwrap(),      // width
+                i32::try_from(height).unwrap(),     // height
+                0,                                  // border, must always be 0, lulz
+                glow::RGBA,                         // format to load the texture from
+                glow::UNSIGNED_BYTE,                // Type of each color element
+                Some(rgba),                         // Actual data
+            );
 
-impl MeshRenderGroupDesc {
-    pub fn new() -> Self {
+            gl.bind_texture(glow::TEXTURE_2D, None);
+            Self {
+                ctx: ctx.gl.clone(),
+                tex: t,
+            }
+        }
+    }
+
+    /// Make a new empty texture with the given format.  Note that reading from the texture
+    /// will give undefined results, hence why this is unsafe.
+    pub unsafe fn new_empty(
+        ctx: &GlContext,
+        format: u32,
+        component_format: u32,
+        width: usize,
+        height: usize,
+    ) -> Self {
+        let gl = &*ctx.gl;
+        let t = gl.create_texture().unwrap();
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, Some(t));
+        gl.tex_image_2d(
+            glow::TEXTURE_2D,               // Texture target
+            0,                              // mipmap level
+            i32::try_from(format).unwrap(), // format to store the texture in (can't fail)
+            i32::try_from(width).unwrap(),  // width
+            i32::try_from(height).unwrap(), // height
+            0,                              // border, must always be 0, lulz
+            format,                         // format to load the texture from
+            component_format,               // Type of each color element
+            None,                           // Actual data
+        );
+
+        gl.bind_texture(glow::TEXTURE_2D, None);
         Self {
-            colors: vec![hal::pso::ColorBlendDesc {
-                mask: hal::pso::ColorMask::ALL,
-                blend: Some(hal::pso::BlendState::ALPHA),
-            }],
+            ctx: ctx.gl.clone(),
+            tex: t,
+        }
+    }
+
+    pub fn into_shared(self) -> SharedTexture {
+        Rc::new(self)
+    }
+}
+
+pub struct Shader {
+    ctx: Rc<glow::Context>,
+    program: GlProgram,
+}
+
+impl Drop for Shader {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_program(self.program);
         }
     }
 }
 
-impl<B> RenderGroupDesc<B, Aux<B>> for MeshRenderGroupDesc
-where
-    B: hal::Backend,
-{
-    fn buffers(&self) -> Vec<rendy::graph::BufferAccess> {
-        vec![]
-    }
-
-    fn images(&self) -> Vec<rendy::graph::ImageAccess> {
-        vec![]
-    }
-
-    fn colors(&self) -> usize {
-        self.colors.len()
-    }
-
-    fn depth(&self) -> bool {
-        true
-    }
-
-    fn build<'a>(
-        self,
-        _ctx: &GraphContext<B>,
-        factory: &mut Factory<B>,
-        _queue: QueueId,
-        aux: &Aux<B>,
-        framebuffer_width: u32,
-        framebuffer_height: u32,
-        subpass: hal::pass::Subpass<'_, B>,
-        _buffers: Vec<NodeBuffer>,
-        _images: Vec<NodeImage>,
-    ) -> Result<Box<dyn RenderGroup<B, Aux<B>>>, failure::Error> {
-        let depth_stencil = hal::pso::DepthStencilDesc {
-            depth: Some(hal::pso::DepthTest {
-                fun: hal::pso::Comparison::LessEqual,
-                write: true,
-            }),
-            depth_bounds: false,
-            stencil: None,
-        };
-        let input_assembler_desc = hal::pso::InputAssemblerDesc {
-            primitive: hal::Primitive::TriangleList,
-            primitive_restart: hal::pso::PrimitiveRestart::Disabled,
-        };
-
-        let layout_sets = vec![FrameInFlight::<B>::get_descriptor_set_layout()];
-        let layout_push_constants = vec![(
-            hal::pso::ShaderStageFlags::ALL,
-            // Pretty sure the size of push constants is given in bytes,
-            // but even putting nonsense sizes in here seems to make
-            // the program run fine unless you put super extreme values in.
-            // Thanks, NVidia.
-            0..(mem::size_of::<UniformData>() as u32),
-        )];
-
-        let vertices = vec![
-            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
-            InstanceData::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
+impl Shader {
+    pub fn new(
+        ctx: &GlContext,
+        vertex_src: &str,
+        fragment_src: &str,
+        shader_version: &str,
+    ) -> Shader {
+        let gl = &*ctx.gl;
+        let shader_sources = [
+            (glow::VERTEX_SHADER, vertex_src),
+            (glow::FRAGMENT_SHADER, fragment_src),
         ];
 
-        let set_layouts = layout_sets
-            .into_iter()
-            .map(|set| {
-                factory
-                    .create_descriptor_set_layout(set.bindings)
-                    .map(Handle::from)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        let pipeline_layout = unsafe {
-            factory
-                .device()
-                .create_pipeline_layout(set_layouts.iter().map(|l| l.raw()), layout_push_constants)
-        }?;
-
-        let mut vertex_buffers = Vec::new();
-        let mut attributes = Vec::new();
-
-        for &(ref elements, stride, rate) in &vertices {
-            push_vertex_desc(elements, stride, rate, &mut vertex_buffers, &mut attributes);
-        }
-
-        let rect = hal::pso::Rect {
-            x: 0,
-            y: 0,
-            w: framebuffer_width as i16,
-            h: framebuffer_height as i16,
-        };
-
-        let mut shader_set = aux.shader.build(factory, Default::default()).unwrap();
-        // TODO: Make disposing of the shader set nicer.  Either store it, or have a wrapper
-        // that disposes it on drop, or something.  Would that cause a double-borrow?
-        //
-        // Actually, think about this more in general, 'cause there's other structures that
-        // need similar handling: set_layouts, pipeline layouts, etc.
-        let shaders = match shader_set.raw() {
-            Err(e) => {
-                shader_set.dispose(factory);
-                return Err(e);
-            }
-            Ok(s) => s,
-        };
-
-        let graphics_pipeline = unsafe {
-            factory.device().create_graphics_pipelines(
-                Some(hal::pso::GraphicsPipelineDesc {
-                    shaders,
-                    rasterizer: hal::pso::Rasterizer::FILL,
-                    vertex_buffers,
-                    attributes,
-                    input_assembler: input_assembler_desc,
-                    blender: hal::pso::BlendDesc {
-                        logic_op: None,
-                        targets: self.colors.clone(),
-                    },
-                    depth_stencil: depth_stencil,
-                    multisampling: None,
-                    baked_states: hal::pso::BakedStates {
-                        viewport: Some(hal::pso::Viewport {
-                            rect,
-                            depth: 0.0..1.0,
-                        }),
-                        scissor: Some(rect),
-                        blend_color: None,
-                        depth_bounds: None,
-                    },
-                    layout: &pipeline_layout,
-                    subpass,
-                    flags: hal::pso::PipelineCreationFlags::empty(),
-                    parent: hal::pso::BasePipeline::None,
-                }),
-                None,
-            )
-        }
-        .remove(0)
-        .map_err(|e| {
-            shader_set.dispose(factory);
-            e
-        })?;
-
-        let (frames, align) = (aux.frames, aux.align);
-
-        // Each `FrameInFlight` needs one descriptor set per draw call.
-        let mut frames_in_flight = vec![];
-        frames_in_flight.extend(
-            (0..frames).map(|_| FrameInFlight::new(factory, align, &aux.draws, &set_layouts[0])),
-        );
-
-        shader_set.dispose(factory);
-
-        Ok(Box::new(MeshRenderGroup::<B> {
-            set_layouts,
-            pipeline_layout,
-            graphics_pipeline,
-            frames_in_flight,
-        }))
-    }
-}
-
-impl<B> RenderGroup<B, Aux<B>> for MeshRenderGroup<B>
-where
-    B: hal::Backend,
-{
-    fn prepare(
-        &mut self,
-        factory: &Factory<B>,
-        _queue: QueueId,
-        index: usize,
-        _subpass: hal::pass::Subpass<'_, B>,
-        aux: &Aux<B>,
-    ) -> PrepareResult {
-        let align = aux.align;
-
-        let layout = &self.set_layouts[0];
-        self.frames_in_flight[index].prepare(factory, &aux.camera, &aux.draws, layout, align);
-        // TODO: Investigate this more...
-        // Ooooooh in the example it always used the same draw command buffer 'cause it
-        // always did indirect drawing, and just modified the draw command in the data buffer.
-        // we're doing direct drawing now so we have to always re-record our drawing
-        // command buffers when they change -- and the number of instances always changes
-        // in this program, so!
-        //PrepareResult::DrawReuse
-        PrepareResult::DrawRecord
-    }
-
-    fn draw_inline(
-        &mut self,
-        mut encoder: RenderPassEncoder<'_, B>,
-        index: usize,
-        _subpass: hal::pass::Subpass<'_, B>,
-        aux: &Aux<B>,
-    ) {
-        encoder.bind_graphics_pipeline(&self.graphics_pipeline);
-        self.frames_in_flight[index].draw(
-            &aux.draws,
-            &self.pipeline_layout,
-            &mut encoder,
-            aux.align,
-        );
-    }
-
-    fn dispose(self: Box<Self>, factory: &mut Factory<B>, _aux: &Aux<B>) {
+        // TODO: Audit unsafe
         unsafe {
-            factory
-                .device()
-                .destroy_graphics_pipeline(self.graphics_pipeline);
-            factory
-                .device()
-                .destroy_pipeline_layout(self.pipeline_layout);
-            drop(self.set_layouts);
+            let program = gl.create_program().expect("Cannot create program");
+            let mut shaders = Vec::with_capacity(shader_sources.len());
+
+            for (shader_type, shader_source) in shader_sources.iter() {
+                let shader = gl
+                    .create_shader(*shader_type)
+                    .expect("Cannot create shader");
+                gl.shader_source(shader, &format!("{}\n{}", shader_version, shader_source));
+                gl.compile_shader(shader);
+                if !gl.get_shader_compile_status(shader) {
+                    panic!(gl.get_shader_info_log(shader));
+                }
+                gl.attach_shader(program, shader);
+                shaders.push(shader);
+            }
+
+            gl.link_program(program);
+            if !gl.get_program_link_status(program) {
+                panic!(gl.get_program_info_log(program));
+            }
+
+            for shader in shaders {
+                gl.detach_shader(program, shader);
+                gl.delete_shader(shader);
+            }
+            // TODO:
+            // By default only one output so this isn't necessary
+            // glBindFragDataLocation(shaderProgram, 0, "outColor");
+            Shader {
+                ctx: ctx.gl.clone(),
+                program,
+            }
         }
     }
 }
 
-pub fn push_vertex_desc(
-    elements: &[hal::pso::Element<hal::format::Format>],
-    stride: hal::pso::ElemStride,
-    rate: hal::pso::VertexInputRate,
-    vertex_buffers: &mut Vec<hal::pso::VertexBufferDesc>,
-    attributes: &mut Vec<hal::pso::AttributeDesc>,
-) {
-    let index = vertex_buffers.len() as hal::pso::BufferIndex;
-
-    vertex_buffers.push(hal::pso::VertexBufferDesc {
-        binding: index,
-        stride,
-        rate,
-    });
-
-    let mut location = attributes.last().map_or(0, |a| a.location + 1);
-    for &element in elements {
-        attributes.push(hal::pso::AttributeDesc {
-            location,
-            binding: index,
-            element,
-        });
-        location += 1;
-    }
-}
-
-/// This is how we can load an image and create a new texture.
-pub fn make_texture<B>(device: &mut GraphicsDevice<B>, image_bytes: &[u8]) -> Arc<Texture<B>>
-where
-    B: hal::Backend,
-{
-    let cursor = std::io::Cursor::new(image_bytes);
-    let texture_builder = rendy::texture::image::load_from_image(cursor, Default::default())
-        .expect("Could not load texture?");
-
-    let texture = texture_builder
-        .build(
-            ImageState {
-                queue: device.queue_id,
-                stage: hal::pso::PipelineStage::FRAGMENT_SHADER,
-                access: hal::image::Access::SHADER_READ,
-                layout: hal::image::Layout::ShaderReadOnlyOptimal,
-            },
-            &mut device.factory,
-        )
-        .unwrap();
-    Arc::new(texture)
-}
-
-fn make_quad_mesh<B>(device: &mut GraphicsDevice<B>) -> Mesh<B>
-where
-    B: hal::Backend,
-{
-    let verts: Vec<[f32; 3]> = vec![
-        [0.0, 0.0, 0.0],
-        [0.0, 100.0, 0.0],
-        [100.0, 100.0, 0.0],
-        [100.0, 0.0, 0.0],
-    ];
-    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2, 0, 2, 3]);
-    // TODO: Mesh color... how do we want to handle this?
-    // It's a bit of an open question in ggez as well, so.
-    // For now the shader just uses the vertex color.
-    // It feels weird but ggez more or less requires both vertex
-    // colors and per-model colors.
-    // Unless you want to handle changing sprite colors by
-    // creating entirely new geometry for the sprite.
-    let vertices: Vec<_> = verts
-        .into_iter()
-        .map(|v| PosColorNorm {
-            position: rendy::mesh::Position::from(v),
-            color: [1.0, 1.0, 1.0, 1.0].into(),
-            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
-        })
-        .collect();
-
-    let m = Mesh::<B>::builder()
-        .with_indices(indices)
-        .with_vertices(&vertices[..])
-        .build(device.queue_id, &device.factory)
-        .unwrap();
-    m
-}
-
-/*
-fn make_tri_mesh<B>(queue_id: QueueId, factory: &mut Factory<B>) -> Mesh<B>
-where
-    B: hal::Backend,
-{
-    let verts: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [50.0, 100.0, 0.0]];
-    let indices = rendy::mesh::Indices::from(vec![0u32, 1, 2]);
-    // TODO: Mesh color... how do we want to handle this?
-    // It's a bit of an open question in ggez as well, so.
-    // For now the shader just uses the vertex color.
-    // It feels weird but ggez more or less requires both vertex
-    // colors and per-model colors.
-    // Unless you want to handle changing sprite colors by
-    // creating entirely new geometry for the sprite.
-    let vertices: Vec<_> = verts
-        .into_iter()
-        .map(|v| PosColorNorm {
-            position: rendy::mesh::Position::from(v),
-            color: [1.0, 1.0, 1.0, 1.0].into(),
-            normal: rendy::mesh::Normal::from([0.0, 0.0, 1.0]),
-        })
-        .collect();
-
-    let m = Mesh::<Backend>::builder()
-        .with_indices(indices)
-        .with_vertices(&vertices[..])
-        .build(queue_id, &factory)
-        .unwrap();
-    m
-}
-*/
-
-/// Creates a shader builder from the given GLSL shader source texts.
-///
-/// Also takes names for the vertex and fragment shaders to be used
-/// in debugging output.
-pub fn load_shaders(vertex_src: &[u8], fragment_src: &[u8]) -> rendy::shader::ShaderSetBuilder {
-    use rendy::shader::SpirvShader;
-    let vert_cursor = io::Cursor::new(vertex_src);
-    let vert_words = hal::pso::read_spirv(vert_cursor)
-        .expect("Invalid SPIR-V buffer passed to load_shaders one way or another!");
-    let vertex = SpirvShader::new(vert_words, hal::pso::ShaderStageFlags::VERTEX, "main");
-
-    let frag_cursor = io::Cursor::new(fragment_src);
-    let frag_words = hal::pso::read_spirv(frag_cursor)
-        .expect("Invalid SPIR-V buffer passed to load_shaders one way or another!");
-    let fragment = SpirvShader::new(frag_words, hal::pso::ShaderStageFlags::FRAGMENT, "main");
-
-    let shader_builder: rendy::shader::ShaderSetBuilder =
-        rendy::shader::ShaderSetBuilder::default()
-            .with_vertex(&vertex)
-            .unwrap()
-            .with_fragment(&fragment)
-            .unwrap();
-    shader_builder
-}
-
-pub fn load_shader_files(
-    vertex_file: &str,
-    fragment_file: &str,
-) -> rendy::shader::ShaderSetBuilder {
-    let vertex_src = std::fs::read(vertex_file).unwrap();
-    let fragment_src = std::fs::read(fragment_file).unwrap();
-    load_shaders(vertex_src.as_ref(), fragment_src.as_ref())
-}
-
-/*
-Exploring API
-
-General idea: render pass -> pipeline -> draw call -> instance
-
-From Viral:
-
-loop {
-  update_frame_data(); // This one writes into uniform buffers bound to frame level descriptor set
-  for pipeline in &pipelines {
-    pipeline.update_pipeline_specific_data(); // This one writes into uniform buffers bound to pipeline level descriptor set
-    for material in &pipeline.materials {
-      material.bind_material_descriptors_set();
-      for mesh in &material.meshes {
-        for object in &mesh.objects {
-          object.fill_instancing_data();
-        }
-        mesh.draw();
-      }
-    }
-  }
-}
-
-
-pub struct DrawCall {
-    // Mesh, texture, sampler info instance data.
-}
-
-/// Roughly corresponds to a RenderGroup
-pub struct Pipeline {
-    // Draws
-// Uniforms
-// Shaders
-}
-
-pub struct GraphicsDevice {
-    // frames in flight...
-// descriptor sets...
-}
-
-impl GraphicsDevice {
-    pub fn add_draw(&mut self, mesh: (), texture: (), sampler_info: (), instances: &[InstanceData]) {}
-}
-
-pub fn present() {}
-*/
-
-/// An initialized graphics device context,
-/// with a window.  The window itself should
-/// be made optional later.  We need it for
-/// building a PresentNode but should be able
-/// to manage without it and add one later.
-pub struct GraphicsDevice<B>
-where
-    B: hal::Backend,
-{
-    // gfx-hal types
-    pub factory: Factory<B>,
-    pub queue_id: QueueId,
-    pub families: rendy::command::Families<B>,
-}
-
-impl<B> GraphicsDevice<B>
-where
-    B: hal::Backend,
-{
-    /*
-    Not sure this is useful after all...
-    We DO want to be able to modify the graph someday
-    and set up a new set of passes, but, not yet.
-    Issues to solve are how to handle the present node,
-    the color and depth buffers, etc.
-
-    Ok, the graph should separate out of this type.
-    Then we can also separat the winit window.
-
-    fn build_graph(&mut self) -> rendy::graph::Graph<B, Aux<B>> {
-        use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
-        let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
-
-        // let color = graph_builder.create_image(
-        //     window_kind,
-        //     1,
-        //     factory.get_surface_format(&surface),
-        //     Some(hal::command::ClearValue::Color([0.1, 0.2, 0.3, 1.0].into())),
-        // );
-        // let depth = graph_builder.create_image(
-        //     window_kind,
-        //     1,
-        //     hal::format::Format::D16Unorm,
-        //     Some(hal::command::ClearValue::DepthStencil(
-        //         hal::command::ClearDepthStencil(1.0, 0),
-        //     )),
-        // );
-        let render_group_desc = MeshRenderGroupDesc::new();
-        let pass = graph_builder.add_node(
-            render_group_desc
-                .builder()
-                .into_subpass()
-                .with_color(self.color)
-                .with_depth_stencil(self.depth)
-                .into_pass(),
-        );
-
-        let surface = self.factory.create_surface(&self.window);
-        let present_builder =
-            PresentNode::builder(&self.factory, surface, self.color).with_dependency(pass);
-
-        let frames = present_builder.image_count();
-        let graph = graph_builder
-            .with_frames_in_flight(self.frame_count)
-            .build(&mut self.factory, &mut self.families, &self.aux)
-            .unwrap();
-
-        graph
-    }
-    */
-
-    pub fn new() -> Self {
-        use rendy::factory::Config;
-        //use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
-        //use rendy::hal::PhysicalDevice as _;
-        let config: Config = Default::default();
-
-        let (factory, families): (Factory<B>, _) = rendy::factory::init(config).unwrap();
-
-        //let width = 800u32;
-        //let height = 600u32;
-
-        //let window_kind = hal::image::Kind::D2(width, height, 1, 1);
-
-        // HACK suggested by Frizi, just use queue 0 for everything
-        // instead of getting it from `graph.node_queue(pass)`.
-        // Since we control in our `Config` what families we have
-        // and what they have, as long as we only ever use one family
-        // (which is probably fine) then we're prooooobably okay with
-        // this.
-        // TODO: Check and see if this has immproved now
-        let queue_id = QueueId {
-            family: families.family_by_index(0).id(),
-            index: 0,
-        };
-
-        Self {
-            factory,
-            families,
-            queue_id,
-        }
-    }
-}
-
-pub struct GraphicsWindowThing<B>
-where
-    B: hal::Backend,
-{
-    // winit types
-    pub window: winit::Window,
-    pub event_loop: winit::EventsLoop,
-    // Rendy types
-    pub graph: rendy::graph::Graph<B, Aux<B>>,
-    pub device: GraphicsDevice<B>,
-    pub depth: rendy::graph::ImageId,
-    pub color: rendy::graph::ImageId,
-    pub aux: Aux<B>,
-}
-
+/// Input to an instance
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct DrawParam {
-    pub dest: Point2,
+    /// TODO: euclid, vek, or what?  UGH.
+    pub dest: [f32; 2],
+    //pub dest: Point2,
     /*
     /// A portion of the drawable to clip, as a fraction of the whole image.
     /// Defaults to the whole image `(0,0 to 1,1)` if omitted.
@@ -1193,193 +472,491 @@ pub struct DrawParam {
     */
 }
 
-pub fn draw(_ctx: &mut (), _target: (), _drawable: (), _param: DrawParam) -> Result<(), ()> {
-    Ok(())
+/// Data we need for each quad instance.
+/// DrawParam gets turned into this, eventually.
+/// We have to be *quite particular* about layout since this gets
+/// fed straight to the shader.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct QuadData {
+    offset: [f32; 2],
+    scale: [f32; 2],
+    color: [f32; 4],
+    src_rect: [f32; 4],
+    rotation: f32,
 }
 
-impl<B> GraphicsWindowThing<B>
-where
-    B: hal::Backend,
-{
-    pub fn make_aux(
-        device: &mut GraphicsDevice<B>,
-        frames: u32,
-        width: f32,
-        height: f32,
-    ) -> Aux<B> {
-        use hal::adapter::PhysicalDevice;
-        let heart_bytes =
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/heart.png"));
-        let texture1 = make_texture(device, heart_bytes);
-        let object_mesh = Arc::new(make_quad_mesh(device));
-        let draws = vec![DrawCall::new(texture1, object_mesh.clone())];
+unsafe impl bytemuck::Zeroable for QuadData {}
 
-        let vertex_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/mesh.vert.spv");
-        let fragment_file = concat!(env!("CARGO_MANIFEST_DIR"), "/src/data/mesh.frag.spv");
+unsafe impl bytemuck::Pod for QuadData {}
 
-        let align = device
-            .factory
-            .physical()
-            .limits()
-            .min_uniform_buffer_offset_alignment;
-
-        let width = width;
-        let height = height;
-        let aux = Aux {
-            frames: frames as _,
-            align,
-
-            draws,
-            camera: UniformData {
-                proj: Transform3::ortho(0.0, width, height, 0.0, 1.0, 200.0),
-
-                view: Transform3::create_translation(0.0, 0.0, 10.0),
-            },
-
-            shader: load_shader_files(vertex_file, fragment_file),
-        };
-        aux
-    }
-
-    pub fn new() -> Self {
-        use rendy::graph::{present::PresentNode, render::*, GraphBuilder};
-        use winit::{EventsLoop, WindowBuilder};
-
-        let mut event_loop = EventsLoop::new();
-
-        let window = WindowBuilder::new()
-            .with_title("Rendy example")
-            .build(&event_loop)
-            .unwrap();
-
-        event_loop.poll_events(|_| ());
-
-        let size = window
-            .get_inner_size()
-            .unwrap()
-            .to_physical(window.get_hidpi_factor());
-        let mut device = GraphicsDevice::<B>::new();
-
-        let mut graph_builder = GraphBuilder::<B, Aux<B>>::new();
-        let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
-
-        let surface: rendy::wsi::Surface<B> = device.factory.create_surface(&window);
-        let format = device.factory.get_surface_format(&surface);
-        let color = graph_builder.create_image(
-            window_kind,
-            1,
-            device.factory.get_surface_format(&surface),
-            Some(hal::command::ClearValue::Color([0.1, 0.2, 0.3, 1.0].into())),
-        );
-        let depth = graph_builder.create_image(
-            window_kind,
-            1,
-            hal::format::Format::D16Unorm,
-            Some(hal::command::ClearValue::DepthStencil(
-                hal::command::ClearDepthStencil(1.0, 0),
-            )),
-        );
-        let render_group_desc = MeshRenderGroupDesc::new();
-        let pass = graph_builder.add_node(
-            render_group_desc
-                .builder()
-                .into_subpass()
-                .with_color(color)
-                .with_depth_stencil(depth)
-                .into_pass(),
-        );
-
-        println!("Surface format is {:?}", format);
-        let present_builder =
-            PresentNode::builder(&device.factory, surface, color).with_dependency(pass);
-        let frames = present_builder.image_count();
-        graph_builder.add_node(present_builder);
-
-        let aux = Self::make_aux(&mut device, frames, size.width as f32, size.height as f32);
-        let graph = graph_builder
-            .with_frames_in_flight(frames)
-            .build(&mut device.factory, &mut device.families, &aux)
-            .unwrap();
-
-        Self {
-            window,
-            event_loop,
-            graph,
-            device,
-            color,
-            depth,
-            aux,
+impl QuadData {
+    const fn empty() -> Self {
+        QuadData {
+            offset: [0.0, 0.0],
+            color: [0.0, 0.0, 0.0, 0.0],
+            scale: [0.0, 0.0],
+            src_rect: [0.0, 0.0, 1.0, 1.0],
+            rotation: 0.0,
         }
     }
-    pub fn run(&mut self) {
-        use std::time;
-        use winit::{Event, WindowEvent};
+    /// Returns a Vec of (element offset, element size)
+    /// pairs.  This is proooobably technically a little UB,
+    /// see https://github.com/rust-lang/rust/issues/48956#issuecomment-544506419
+    /// but with repr(C) it's probably safe enough.
+    ///
+    /// Also returns the name of the shader variable associated with each field...
+    unsafe fn layout() -> Vec<(&'static str, usize, usize)> {
+        // It'd be nice if we could make this `const` but
+        // doing const pointer arithmatic is unstable.
+        let thing = QuadData::empty();
+        let thing_base = &thing as *const QuadData;
+        let offset_offset = (&thing.offset as *const [f32; 2] as usize) - thing_base as usize;
+        let offset_size = mem::size_of_val(&thing.offset);
 
-        let mut frames = 0u64..;
-        let mut rng = oorandom::Rand32::new(12345);
+        let color_offset = (&thing.color as *const [f32; 4] as usize) - thing_base as usize;
+        let color_size = mem::size_of_val(&thing.color);
 
-        let mut should_close = false;
+        let scale_offset = (&thing.scale as *const [f32; 2] as usize) - thing_base as usize;
+        let scale_size = mem::size_of_val(&thing.scale);
 
-        let started = time::Instant::now();
-        // TODO: Someday actually check against MAX_OBJECTS
-        while !should_close {
-            for _i in &mut frames {
-                self.device.factory.maintain(&mut self.device.families);
-                self.event_loop.poll_events(|event| match event {
-                    Event::WindowEvent {
-                        event: WindowEvent::CloseRequested,
-                        ..
-                    } => should_close = true,
-                    _ => (),
-                });
-                self.graph.run(
-                    &mut self.device.factory,
-                    &mut self.device.families,
-                    &self.aux,
-                );
-                // Add another object
-                for draw_call in &mut self.aux.draws {
-                    draw_call.add_object(&mut rng, 1024.0, 768.0);
-                }
-                if should_close {
-                    break;
-                }
+        let src_rect_offset = (&thing.src_rect as *const [f32; 4] as usize) - thing_base as usize;
+        let src_rect_size = mem::size_of_val(&thing.src_rect);
+
+        let rotation_offset = (&thing.rotation as *const f32 as usize) - thing_base as usize;
+        let rotation_size = mem::size_of_val(&thing.rotation);
+
+        vec![
+            ("model_offset", offset_offset, offset_size),
+            ("model_color", color_offset, color_size),
+            ("model_scale", scale_offset, scale_size),
+            ("model_src_rect", src_rect_offset, src_rect_size),
+            ("model_rotation", rotation_offset, rotation_size),
+        ]
+    }
+}
+
+/// Filter modes a sampler may have.
+///
+/// TODO: Fill this out as necessary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FilterMode {
+    Nearest,
+    Linear,
+}
+
+impl FilterMode {
+    /// Turns the filter mode into the appropriate OpenGL enum
+    fn to_gl(self) -> u32 {
+        match self {
+            FilterMode::Nearest => glow::NEAREST,
+            FilterMode::Linear => glow::LINEAR,
+        }
+    }
+}
+
+/// Wrap modes a sampler may have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WrapMode {
+    Clamp,
+    Tile,
+    Mirror,
+}
+
+impl WrapMode {
+    /// Turns the wrap mode into the appropriate OpenGL enum
+    fn to_gl(self) -> u32 {
+        match self {
+            WrapMode::Clamp => glow::CLAMP_TO_EDGE,
+            WrapMode::Tile => glow::REPEAT,
+            WrapMode::Mirror => glow::MIRRORED_REPEAT,
+        }
+    }
+}
+
+/// A description of a sampler.  We cache the actual
+/// samplers as needed in the GlContext.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SamplerSpec {
+    min_filter: FilterMode,
+    mag_filter: FilterMode,
+    wrap: WrapMode,
+}
+
+impl SamplerSpec {
+    pub fn new(min: FilterMode, mag: FilterMode, wrap: WrapMode) -> Self {
+        Self {
+            min_filter: min,
+            mag_filter: mag,
+            wrap,
+        }
+    }
+}
+
+impl Default for SamplerSpec {
+    fn default() -> Self {
+        Self::new(FilterMode::Nearest, FilterMode::Nearest, WrapMode::Tile)
+    }
+}
+
+pub struct QuadDrawCall {
+    ctx: Rc<glow::Context>,
+    texture: SharedTexture,
+    sampler: GlSampler,
+    instances: Vec<QuadData>,
+    vbo: GlBuffer,
+    vao: GlVertexArray,
+    instance_vbo: GlBuffer,
+    texture_location: GlUniformLocation,
+    /// Whether or not the instances have changed
+    /// compared to what the VBO contains, so we can
+    /// only upload to the VBO on changes
+    dirty: bool,
+}
+
+impl Drop for QuadDrawCall {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_vertex_array(self.vao);
+            self.ctx.delete_buffer(self.vbo);
+            self.ctx.delete_buffer(self.instance_vbo);
+            // Don't need to drop the sampler, it's owned by
+            // the `GlContext`.
+            // And the texture takes care of itself.
+        }
+    }
+}
+
+impl QuadDrawCall {
+    unsafe fn set_vertex_pointers(ctx: &GlContext, shader: &Shader) {
+        let gl = &*ctx.gl;
+        let layout = QuadData::layout();
+        for (name, offset, size) in layout {
+            info!("Layout: {} offset, {} size", offset, size);
+            let element_size = mem::size_of::<f32>();
+            let attrib_location =
+                u32::try_from(gl.get_attrib_location(shader.program, name)).unwrap();
+            // TODO: Okay, something is wrong with the strides or such here.  But we're not gonna
+            // sweat it yet.
+            gl.vertex_attrib_pointer_f32(
+                attrib_location,
+                (size / element_size) as i32,
+                glow::FLOAT,
+                false,
+                mem::size_of::<QuadData>() as i32,
+                offset as i32,
+            );
+            gl.vertex_attrib_divisor(attrib_location, 1);
+            gl.enable_vertex_attrib_array(attrib_location);
+        }
+    }
+
+    fn new(
+        ctx: &mut GlContext,
+        texture: SharedTexture,
+        sampler: SamplerSpec,
+        shader: &Shader,
+    ) -> Self {
+        let sampler = ctx.get_sampler(&sampler);
+        let gl = &*ctx.gl;
+        // TODO: Audit unsafe
+        unsafe {
+            let vao = gl.create_vertex_array().unwrap();
+            gl.bind_vertex_array(Some(vao));
+
+            // Okay, it looks like which VBO is bound IS part of the VAO data,
+            // and it is stored *when glVertexAttribPointer is called*.
+            // According to https://open.gl/drawing at least.
+            // And, that stuff I THINK is stored IN THE ATTRIBUTE INFO,
+            // in this case `offset_attrib`, and then THAT gets attached
+            // to the VAO by enable_vertex_attrib_array()
+            let vbo = gl.create_buffer().unwrap();
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+
+            // TODO: https://github.com/grovesNL/glow/issues/54
+            let dummy_attrib =
+                u32::try_from(gl.get_attrib_location(shader.program, "vertex_dummy")).unwrap();
+            gl.vertex_attrib_pointer_f32(
+                dummy_attrib,
+                2,
+                glow::FLOAT,
+                false,
+                // We can just say the stride of this guy is 0, since
+                // we never actually use it (yet).  That lets us use a
+                // widdle bitty awway for this.
+                0,
+                0,
+            );
+            gl.enable_vertex_attrib_array(dummy_attrib);
+
+            // We DO need a buffer of per-vertex attributes, WebGL gets snippy
+            // if we just give it per-instance attributes and say "yeah each
+            // vertex just has nothing attached to it".  Which is exactly what
+            // we want for quad drawing, alas.
+            //
+            // But we can make a buffer that just contains one vec2(0,0) for each vertex
+            // and give it that, and that seems just fine.
+            // And we only need enough vertices to draw one quad and never have to alter it.
+            // We could reuse the same buffer for all QuadDrawCall's, tbh, but that seems
+            // a bit overkill.
+            let empty_slice: &[u8] = &[0; 8 * 6];
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, empty_slice, glow::STREAM_DRAW);
+
+            // Now create another VBO containing per-instance data
+            let instance_vbo = gl.create_buffer().unwrap();
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
+            Self::set_vertex_pointers(ctx, shader);
+
+            // We can't define locations for uniforms, yet.
+            let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
+
+            gl.bind_vertex_array(None);
+
+            Self {
+                ctx: ctx.gl.clone(),
+                vbo,
+                vao,
+                texture,
+                sampler,
+                instance_vbo,
+                texture_location,
+                instances: vec![],
+                dirty: true,
             }
         }
-        let finished = time::Instant::now();
-        let dt = finished - started;
-        let millis = dt.as_millis() as f64;
-        let fps = frames.start as f64 / (millis / 1000.0);
-        println!(
-            "{} frames over {} seconds; {} fps",
-            frames.start,
-            millis / 1000.0,
-            fps
+    }
+
+    pub fn add(&mut self, quad: QuadData) {
+        self.dirty = true;
+        self.instances.push(quad);
+    }
+
+    fn add_random(&mut self, rand: &mut oorandom::Rand32) {
+        let x = rand.rand_float() * 2.0 - 1.0;
+        let y = rand.rand_float() * 2.0 - 1.0;
+        let r = rand.rand_float();
+        let g = rand.rand_float();
+        let b = rand.rand_float();
+        let a = 1.0;
+        let quad = QuadData {
+            offset: [x, y],
+            color: [r, g, b, a],
+            scale: [1.2, 1.2],
+            src_rect: [0.0, 0.0, 1.0, 1.0],
+            rotation: 0.0,
+        };
+        self.add(quad);
+    }
+
+    /// Upload the array of instances to our VBO
+    unsafe fn upload_instances(&mut self, gl: &Context) {
+        // TODO: audit unsafe
+        // Use the `bytemuck` crate?
+        let bytes_slice: &[u8] = bytemuck::try_cast_slice(self.instances.as_slice()).unwrap();
+
+        // Fill instance buffer
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instance_vbo));
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        self.dirty = false;
+    }
+
+    unsafe fn draw(&mut self, gl: &Context) {
+        if self.dirty {
+            self.upload_instances(gl);
+        }
+        // Bind VAO
+        let num_instances = self.instances.len();
+        let num_vertices = 6;
+        gl.bind_vertex_array(Some(self.vao));
+
+        // Bind texture
+        // TODO: is this active_texture() call necessary?
+        // Will be if we ever do multi-texturing, I suppose.
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, Some(self.texture.tex));
+        gl.uniform_1_i32(Some(self.texture_location), 0);
+
+        // bind sampler
+        // This is FUCKING WHACKO.  I set the active texture
+        // unit to glow::TEXTURE0 , which sets it to texture
+        // unit 0, then I bind the sampler to 0, which sets it
+        // to texture unit 0.  I think.  You have to dig into
+        // the ARB extension RFC to figure this out 'cause it isn't
+        // documented anywhere else I can find it.
+        // Thanks, Khronos.
+        gl.bind_sampler(0, Some(self.sampler));
+        gl.draw_arrays_instanced(
+            glow::TRIANGLES,
+            0,
+            num_vertices as i32,
+            num_instances as i32,
         );
     }
-    pub fn dispose(mut self) {
-        // TODO: This doesn't actually dispose of everything right.
-        // Why not?
-        self.graph.dispose(&mut self.device.factory, &self.aux);
-        //self.device.factory.dispose(self.aux.
+}
+
+pub struct QuadPipeline {
+    drawcalls: Vec<QuadDrawCall>,
+    shader: Shader,
+    projection: Mat4,
+    projection_location: GlUniformLocation,
+}
+
+impl QuadPipeline {
+    unsafe fn new(ctx: &GlContext, shader: Shader) -> Self {
+        let gl = &*ctx.gl;
+        //let projection = Mat4::identity();
+        let projection = ortho_mat(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0);
+        let projection_location = gl
+            .get_uniform_location(shader.program, "projection")
+            //.get_uniform_location(shader.program, "tex")
+            .unwrap();
+        Self {
+            drawcalls: vec![],
+            shader,
+            projection,
+            projection_location,
+        }
+    }
+
+    unsafe fn draw(&mut self, gl: &Context) {
+        gl.use_program(Some(self.shader.program));
+        gl.uniform_matrix_4_f32_slice(
+            Some(self.projection_location),
+            false,
+            &self.projection.to_cols_array(),
+        );
+        for dc in self.drawcalls.iter_mut() {
+            dc.draw(gl);
+        }
     }
 }
 
-/// This is sorta squirrelly, it can't easily be a method
-/// without us having to specify the backend type anyway,
-/// soooooo.
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn new_vulkan_device() -> GraphicsDevice<rendy::vulkan::Backend> {
-    GraphicsDevice::new()
+/// Currently, no input framebuffers or such.
+/// We're not actually intending to reproduce Rendy's Graph type here.
+/// This may eventually feed into a bounce buffer or such though.
+pub struct RenderPass {
+    ctx: Rc<glow::Context>,
+    output_framebuffer: GlFramebuffer,
+    _output_texture: SharedTexture,
+    /// This may be a texture or a render buffer, if we don't need to sample
+    /// from it we can use a render buffer.  For now, for simplicity, we use
+    /// a texture.
+    _output_depthbuffer: GlRenderbuffer,
+    pipelines: Vec<QuadPipeline>,
+    final_pipeline: QuadPipeline,
 }
 
-#[cfg(target_os = "macos")]
-pub fn new_metal_device() -> GraphicsDevice<rendy::metal::Backend> {
-    GraphicsDevice::new()
+impl Drop for RenderPass {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_framebuffer(self.output_framebuffer);
+            // viciously leak the depth buffer for now.  cruel!
+        }
+    }
 }
 
-#[cfg(target_os = "windows")]
-pub fn new_dx_device() -> GraphicsDevice<rendy::dx12::Backend> {
-    GraphicsDevice::new()
+impl RenderPass {
+    unsafe fn new(ctx: &mut GlContext, width: usize, height: usize) -> Self {
+        let gl = &*ctx.gl;
+        let t =
+            Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height).into_shared();
+        // TODO: Is this the right format?  Newp.  What is?
+        /*
+        let depth = Texture::new_empty(
+            ctx,
+            glow::DEPTH_COMPONENT16,
+            glow::UNSIGNED_SHORT,
+            width,
+            height,
+        );
+        */
+        let depth = gl.create_renderbuffer().unwrap();
+        let fb = gl.create_framebuffer().unwrap();
+        // Now we have our color texture, depth buffer and framebuffer, and we
+        // glue them all together.
+        {
+            gl.bind_texture(glow::TEXTURE_2D, Some(t.tex));
+            // We need to add filtering params to the texture, for Reasons.
+            // We might be able to use samplers instead, but not yet.
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MAG_FILTER,
+                glow::NEAREST as i32,
+            );
+            gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_MIN_FILTER,
+                glow::NEAREST as i32,
+            );
+
+            /*
+            gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
+            gl.renderbuffer_storage(
+                glow::RENDERBUFFER,
+                glow::DEPTH_COMPONENT,
+                width as i32,
+                height as i32,
+            );
+            */
+
+            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
+            gl.framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(t.tex),
+                0,
+            );
+            /*
+            gl.framebuffer_renderbuffer(
+                glow::FRAMEBUFFER,
+                glow::DEPTH_ATTACHMENT,
+                glow::RENDERBUFFER,
+                Some(depth),
+            );
+            */
+
+            // Set list of draw buffers
+            let draw_buffers = &[glow::COLOR_ATTACHMENT0];
+            gl.draw_buffers(draw_buffers);
+
+            // Verify results
+            if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
+                panic!("Framebuffer hecked up");
+            }
+
+            // Reset heckin bindings
+            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+            gl.bind_texture(glow::TEXTURE_2D, None);
+        }
+
+        let mut final_pipeline = QuadPipeline::new(&ctx, GlContext::default_shader(ctx));
+        let drawcall = QuadDrawCall::new(
+            ctx,
+            t.clone(),
+            SamplerSpec::default(),
+            &final_pipeline.shader,
+        );
+        final_pipeline.drawcalls.push(drawcall);
+
+        Self {
+            ctx: ctx.gl.clone(),
+            output_framebuffer: fb,
+            _output_texture: t,
+            _output_depthbuffer: depth,
+            pipelines: vec![],
+            final_pipeline,
+        }
+    }
+
+    unsafe fn draw(&mut self, gl: &Context) {
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.output_framebuffer));
+        for dc in self.pipelines.iter_mut() {
+            dc.draw(gl);
+        }
+        // Draw to the screen
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        self.final_pipeline.draw(gl);
+    }
 }
-*/
