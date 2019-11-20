@@ -45,7 +45,6 @@ pub struct GlContext {
     /// them separately, you just ask for the one you want and it gives
     /// it to you.
     samplers: HashMap<SamplerSpec, GlSampler>,
-    shader_version: String,
 
     lulz: oorandom::Rand32,
 }
@@ -88,15 +87,10 @@ const FRAGMENT_SHADER_SOURCE: &str = include_str!("data/quad.frag.glsl");
 
 impl GlContext {
     fn default_shader(ctx: &GlContext) -> Shader {
-        Shader::new(
-            &ctx,
-            VERTEX_SHADER_SOURCE,
-            FRAGMENT_SHADER_SOURCE,
-            &ctx.shader_version,
-        )
+        Shader::new(&ctx, VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE)
     }
 
-    pub fn new(gl: glow::Context, shader_version: &str) -> Self {
+    pub fn new(gl: glow::Context) -> Self {
         // GL SETUP
         unsafe {
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
@@ -108,7 +102,6 @@ impl GlContext {
                 //pipelines: vec![],
                 passes: vec![],
                 samplers: HashMap::new(),
-                shader_version: shader_version.to_string(),
                 lulz,
             };
             s.register_debug_callback();
@@ -364,12 +357,7 @@ impl Drop for Shader {
 }
 
 impl Shader {
-    pub fn new(
-        ctx: &GlContext,
-        vertex_src: &str,
-        fragment_src: &str,
-        shader_version: &str,
-    ) -> Shader {
+    pub fn new(ctx: &GlContext, vertex_src: &str, fragment_src: &str) -> Shader {
         let gl = &*ctx.gl;
         let shader_sources = [
             (glow::VERTEX_SHADER, vertex_src),
@@ -385,7 +373,7 @@ impl Shader {
                 let shader = gl
                     .create_shader(*shader_type)
                     .expect("Cannot create shader");
-                gl.shader_source(shader, &format!("{}\n{}", shader_version, shader_source));
+                gl.shader_source(shader, shader_source);
                 gl.compile_shader(shader);
                 if !gl.get_shader_compile_status(shader) {
                     panic!(gl.get_shader_info_log(shader));
@@ -669,7 +657,7 @@ impl QuadDrawCall {
             // And we only need enough vertices to draw one quad and never have to alter it.
             // We could reuse the same buffer for all QuadDrawCall's, tbh, but that seems
             // a bit overkill.
-            let empty_slice: &[u8] = &[0; mem::size_of::<f32>() * 6];
+            let empty_slice: &[u8] = &[0; mem::size_of::<f32>() * 2 * 6];
             gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, empty_slice, glow::STREAM_DRAW);
 
             // Now create another VBO containing per-instance data

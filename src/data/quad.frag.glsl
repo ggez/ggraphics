@@ -1,5 +1,4 @@
-// Version must be prepended by the loader program.
-// Bleh.
+#version 300 es
 precision mediump float;
 in vec2 vert;
 in vec2 tex_coord;

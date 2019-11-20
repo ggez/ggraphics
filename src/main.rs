@@ -15,7 +15,7 @@ fn run_wasm() {
 
     console_error_panic_hook::set_once();
     // CONTEXT CREATION
-    let (gl, render_loop, shader_version) = {
+    let (gl, render_loop) = {
         use wasm_bindgen::JsCast;
         let canvas = web_sys::window()
             .unwrap()
@@ -34,12 +34,11 @@ fn run_wasm() {
         (
             glow::Context::from_webgl2_context(webgl2_context),
             glow::RenderLoop::from_request_animation_frame(),
-            "#version 300 es",
         )
     };
 
     // GL SETUP
-    let mut ctx = Some(GlContext::new(gl, shader_version));
+    let mut ctx = Some(GlContext::new(gl));
 
     // RENDER LOOP
     render_loop.run(move |running: &mut bool| {
@@ -65,7 +64,7 @@ fn run_glutin() {
     // CONTEXT CREATION
     unsafe {
         // Create a context from a glutin window on non-wasm32 targets
-        let (gl, event_loop, windowed_context, shader_version) = {
+        let (gl, event_loop, windowed_context) = {
             let el = glutin::event_loop::EventLoop::new();
             let wb = glutin::window::WindowBuilder::new()
                 .with_title("Hello triangle!")
@@ -84,13 +83,12 @@ fn run_glutin() {
             let context = glow::Context::from_loader_function(|s| {
                 windowed_context.get_proc_address(s) as *const _
             });
-            //(context, el, windowed_context, "#version 410")
-            (context, el, windowed_context, "#version 300 es")
+            (context, el, windowed_context)
         };
         trace!("Window created");
 
         // GL SETUP
-        let mut ctx = GlContext::new(gl, shader_version);
+        let mut ctx = GlContext::new(gl);
         let (vend, rend, vers, shader_vers) = ctx.get_info();
         info!(
             "GL context created.

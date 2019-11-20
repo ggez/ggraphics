@@ -1,5 +1,4 @@
-// Version must be prepended by the loader program.
-// Bleh.
+#version 300 es
 const vec2 verts[6] = vec2[6](
     vec2(0.0f, 0.0f),
     vec2(1.0f, 1.0f),
