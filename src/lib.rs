@@ -1,6 +1,3 @@
-// Suggested logging level for debugging:
-// env RUST_LOG=info cargo run
-//
 // Next up: Render passes
 // multiple pipelines
 // start refactoring it into an actual lib
@@ -776,6 +773,137 @@ impl QuadPipeline {
     }
 }
 
+pub struct TextureRenderTarget {
+    ctx: Rc<glow::Context>,
+    output_framebuffer: GlFramebuffer,
+    output_texture: SharedTexture,
+    _output_depthbuffer: GlRenderbuffer,
+}
+
+impl Drop for TextureRenderTarget {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_framebuffer(self.output_framebuffer);
+            self.ctx.delete_renderbuffer(self._output_depthbuffer);
+        }
+    }
+}
+
+impl TextureRenderTarget {
+    /// Create a new render target rendering to a texture.
+    unsafe fn new(ctx: &GlContext, width: usize, height: usize) -> Self {
+        let gl = &*ctx.gl;
+
+        let t =
+            Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height).into_shared();
+        let depth = gl.create_renderbuffer().unwrap();
+        let fb = gl.create_framebuffer().unwrap();
+
+        // Now we have our color texture, depth buffer and framebuffer, and we
+        // glue them all together.
+        gl.bind_texture(glow::TEXTURE_2D, Some(t.tex));
+        // We need to add filtering params to the texture, for Reasons.
+        // We might be able to use samplers instead, but not yet.
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MAG_FILTER,
+            glow::NEAREST as i32,
+        );
+        gl.tex_parameter_i32(
+            glow::TEXTURE_2D,
+            glow::TEXTURE_MIN_FILTER,
+            glow::NEAREST as i32,
+        );
+
+        /*
+         * TODO: This panics for some reason
+        gl.bind_renderbuffer(glow::RENDERBUFFER, Some(depth));
+        gl.renderbuffer_storage(
+            glow::RENDERBUFFER,
+            glow::DEPTH_COMPONENT,
+            width as i32,
+            height as i32,
+        );
+        */
+
+        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fb));
+        gl.framebuffer_texture_2d(
+            glow::FRAMEBUFFER,
+            glow::COLOR_ATTACHMENT0,
+            glow::TEXTURE_2D,
+            Some(t.tex),
+            0,
+        );
+        /*
+         * TODO: This panics for some reason
+        gl.framebuffer_renderbuffer(
+            glow::FRAMEBUFFER,
+            glow::DEPTH_ATTACHMENT,
+            glow::RENDERBUFFER,
+            Some(depth),
+        );
+        */
+
+        // Set list of draw buffers
+        let draw_buffers = &[glow::COLOR_ATTACHMENT0];
+        gl.draw_buffers(draw_buffers);
+
+        // Verify results
+        if gl.check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
+            panic!("Framebuffer hecked up");
+        }
+
+        // Reset heckin bindings
+        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
+        gl.bind_texture(glow::TEXTURE_2D, None);
+        Self {
+            ctx: ctx.gl.clone(),
+            output_framebuffer: fb,
+            output_texture: t,
+            _output_depthbuffer: depth,
+        }
+    }
+}
+
+/// The options for what a render pass can write to.
+///
+pub enum RenderTarget {
+    Texture(TextureRenderTarget),
+    Screen,
+}
+
+impl RenderTarget {
+    /// Return the render target corresponding to the output display.
+    pub fn screen_target() -> Self {
+        Self::Screen
+    }
+
+    /// Create a new render target rendering to a texture
+    pub fn new_target(ctx: &GlContext, width: usize, height: usize) -> Self {
+        unsafe {
+            let target = TextureRenderTarget::new(ctx, width, height);
+            Self::Texture(target)
+        }
+    }
+
+    /// Bind this render target so it will be drawn to.
+    unsafe fn bind(&self, gl: &glow::Context) {
+        let fb = match self {
+            Self::Screen => None,
+            Self::Texture(trt) => Some(trt.output_framebuffer),
+        };
+        gl.bind_framebuffer(glow::FRAMEBUFFER, fb);
+    }
+
+    /// Get the texture this render target outputs to, if any.
+    fn get_texture(&self) -> Option<SharedTexture> {
+        match self {
+            Self::Screen => None,
+            Self::Texture(trt) => Some(trt.output_texture.clone()),
+        }
+    }
+}
+
 /// Currently, no input framebuffers or such.
 /// We're not actually intending to reproduce Rendy's Graph type here.
 /// This may eventually feed into a bounce buffer or such though.
@@ -783,27 +911,33 @@ impl QuadPipeline {
 /// TODO: Clear color should be part of this.
 pub struct RenderPass {
     ctx: Rc<glow::Context>,
+    target: RenderTarget,
+    /*
     output_framebuffer: GlFramebuffer,
     _output_texture: SharedTexture,
     /// This may be a texture or a render buffer, if we don't need to sample
     /// from it we can use a render buffer.  For now, for simplicity, we use
     /// a texture.
     _output_depthbuffer: GlRenderbuffer,
+    */
     pipelines: Vec<QuadPipeline>,
     final_pipeline: QuadPipeline,
 }
 
 impl Drop for RenderPass {
     fn drop(&mut self) {
+        /*
         unsafe {
             self.ctx.delete_framebuffer(self.output_framebuffer);
             // TODO: We viciously leak the depth buffer for now.  cruel!
         }
+        */
     }
 }
 
 impl RenderPass {
     unsafe fn new(ctx: &mut GlContext, width: usize, height: usize) -> Self {
+        /*
         let gl = &*ctx.gl;
         let t =
             Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height).into_shared();
@@ -876,30 +1010,35 @@ impl RenderPass {
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
             gl.bind_texture(glow::TEXTURE_2D, None);
         }
+        */
 
+        let target = RenderTarget::new_target(ctx, width, height);
         let mut final_pipeline = QuadPipeline::new(&ctx, GlContext::default_shader(ctx));
         let drawcall = QuadDrawCall::new(
             ctx,
-            t.clone(),
+            target.get_texture().unwrap(),
             SamplerSpec::default(),
             &final_pipeline.shader,
         );
         final_pipeline.drawcalls.push(drawcall);
 
         Self {
+            target,
             ctx: ctx.gl.clone(),
+            /*
             output_framebuffer: fb,
             _output_texture: t,
             _output_depthbuffer: depth,
+            */
             pipelines: vec![],
             final_pipeline,
         }
     }
 
     unsafe fn draw(&mut self, gl: &Context) {
-        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(self.output_framebuffer));
-        for dc in self.pipelines.iter_mut() {
-            dc.draw(gl);
+        self.target.bind(gl);
+        for pipeline in self.pipelines.iter_mut() {
+            pipeline.draw(gl);
         }
         // Draw to the screen
         gl.bind_framebuffer(glow::FRAMEBUFFER, None);
