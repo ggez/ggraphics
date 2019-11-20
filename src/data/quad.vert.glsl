@@ -1,45 +1,45 @@
-#version 450
-#extension GL_ARB_separate_shader_objects : enable
+// Version must be prepended by the loader program.
+// Bleh.
+const vec2 verts[6] = vec2[6](
+    vec2(0.0f, 0.0f),
+    vec2(1.0f, 1.0f),
+    vec2(0.0f, 1.0f),
 
-// per-instance data below here?.
-// vec4[4] is used instead of mat4 due to spirv-cross bug for dx12 backend
-layout(location = 0) in vec4 model[4];
-// Skip some locations for the members of the vec above
-layout(location = 4) in vec4 rect;
-layout(location = 5) in vec4 model_color;
+    vec2(0.0f, 0.0f),
+    vec2(1.0f, 0.0f),
+    vec2(1.0f, 1.0f)
+);
+const vec2 uvs[6] = vec2[6](
+    vec2(0.0f, 1.0f),
+    vec2(1.0f, 0.0f),
+    vec2(0.0f, 0.0f),
 
-layout(push_constant) uniform ModelView {
-    mat4 proj;
-    mat4 view;
-};
+    vec2(0.0f, 1.0f),
+    vec2(1.0f, 1.0f),
+    vec2(1.0f, 0.0f)
+);
 
-vec2 vertices[6] = {
-    vec2(0.0, 0.0),
-    vec2(0.0, 1.0),
-    vec2(1.0, 1.0),
-    vec2(0.0, 0.0),
-    vec2(1.0, 1.0),
-    vec2(1.0, 0.0),
-};
+// TODO: We don't actually need layouts here, hmmm.
+// Not sure how we want to define these.
 
+// Gotta actually use this dummy value or else it'll get
+// optimized out and we'll fail to look it up later.
+layout(location = 0) in vec2 vertex_dummy;
+layout(location = 1) in vec4 model_color;
+layout(location = 2) in vec2 model_offset;
+layout(location = 3) in vec2 model_scale;
+layout(location = 4) in vec4 model_src_rect;
+layout(location = 5) in float model_rotation;
+uniform mat4 projection;
 
-layout(location = 0) out vec4 frag_pos;
-layout(location = 1) out vec4 frag_color;
-layout(location = 2) out vec4 uv;
+out vec2 vert;
+out vec2 tex_coord;
+out vec4 frag_color;
 
 void main() {
-    mat4 model_mat = mat4(model[0], model[1], model[2], model[3]);
-
+    vert = verts[gl_VertexID % 6] * model_scale + vertex_dummy * model_rotation + model_offset;
+    // TODO: Double-check these UV's are correct
+    tex_coord = uvs[gl_VertexID] * model_src_rect.zw + model_src_rect.xy;
     frag_color = model_color;
-    vec4 vertex = vec4(vertices[gl_VertexIndex % 6], 0.0, 0.0);
-    //frag_pos = model_mat * vec4(vertex, 0.0, 1.0);
-    frag_pos = vec4(vertex.x * 10, vertex.y * 10, 0.0, 1.0);
-    // TODO: Have unit quad's and scale verts properly by some multiplier,
-    // instead of having to divide by the size of the quad
-    // We also invert Y here to make things right-side up.
-    //uv = vec4(pos.x / 100.0, 1 - (pos.y / 100.0), 0, 0);
-    //uv = vec4(vertex.x, 1 -vertex.y, 0.0, 0.0);
-
-    // TODO: Fix depth crap!
-    gl_Position = vertex * proj * view;
+    gl_Position = vec4(vert, 0.0, 1.0) * projection;
 }

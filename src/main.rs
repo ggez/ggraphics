@@ -8,23 +8,17 @@
 // Try out triangle strips?  idk, vertices don't seem much a bottleneck.
 // Resize viewport properly
 
-use log::*;
-use std::time::Instant;
-
 use ggraphics::*;
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
-pub fn wasm_main() {
-    main();
-}
-
 #[cfg(target_arch = "wasm32")]
 fn run_wasm() {
-    use console_error_panic_hook;
-    use web_sys;
+    //use console_error_panic_hook;
+    //use web_sys;
+    use glow::HasRenderLoop;
+    use std::time::Duration;
 
     console_error_panic_hook::set_once();
     // CONTEXT CREATION
@@ -72,6 +66,8 @@ fn run_wasm() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_glutin() {
+    use log::*;
+    use std::time::Instant;
     pretty_env_logger::init();
     // CONTEXT CREATION
     unsafe {
@@ -170,4 +166,9 @@ pub fn main() {
     run_wasm();
     #[cfg(not(target_arch = "wasm32"))]
     run_glutin();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen(start))]
+pub fn wasm_main() {
+    main();
 }

@@ -1,22 +1,16 @@
-#version 450
-#extension GL_ARB_separate_shader_objects : enable
+// Version must be prepended by the loader program.
+// Bleh.
+precision mediump float;
+in vec2 vert;
+in vec2 tex_coord;
+in vec4 frag_color;
+uniform sampler2D tex;
 
-layout(early_fragment_tests) in;
-
-layout(location = 0) in vec4 frag_pos;
-layout(location = 1) in vec4 frag_color;
-layout(location = 2) in vec4 uv;
-
-layout(location = 0) out vec4 color;
-
-layout(set = 0, binding = 1) uniform texture2D colortex;
-layout(set = 0, binding = 2) uniform sampler colorsampler;
-layout(push_constant) uniform PushConstantTest {
-    mat4 proj;
-    mat4 view;
-};
+layout(location=0) out vec4 color;
 
 void main() {
-    //color = texture(sampler2D(colortex, colorsampler), uv.xy) * frag_color;
-    color = vec4(1,1,1,1);
+    // Useful for looking at UV values
+    //color = vec4(tex_coord, 0.5, 1.0);
+
+    color = texture(tex, tex_coord) * frag_color;
 }

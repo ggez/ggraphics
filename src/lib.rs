@@ -86,70 +86,15 @@ fn ortho(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> [
 fn ortho_mat(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> Mat4 {
     Mat4::from_cols_array_2d(&ortho(left, right, top, bottom, far, near))
 }
+const VERTEX_SHADER_SOURCE: &str = include_str!("data/quad.vert.glsl");
+const FRAGMENT_SHADER_SOURCE: &str = include_str!("data/quad.frag.glsl");
 
 impl GlContext {
     fn default_shader(ctx: &GlContext) -> Shader {
-        let vertex_shader_source = r#"const vec2 verts[6] = vec2[6](
-                vec2(0.0f, 0.0f),
-                vec2(1.0f, 1.0f),
-                vec2(0.0f, 1.0f),
-
-                vec2(0.0f, 0.0f),
-                vec2(1.0f, 0.0f),
-                vec2(1.0f, 1.0f)
-            );
-            const vec2 uvs[6] = vec2[6](
-                vec2(0.0f, 1.0f),
-                vec2(1.0f, 0.0f),
-                vec2(0.0f, 0.0f),
-
-                vec2(0.0f, 1.0f),
-                vec2(1.0f, 1.0f),
-                vec2(1.0f, 0.0f)
-            );
-
-            // TODO: We don't actually need layouts here, hmmm.
-            // Not sure how we want to define these.
-
-            // Gotta actually use this dummy value or else it'll get
-            // optimized out and we'll fail to look it up later.
-            layout(location = 0) in vec2 vertex_dummy;
-            layout(location = 1) in vec4 model_color;
-            layout(location = 2) in vec2 model_offset;
-            layout(location = 3) in vec2 model_scale;
-            layout(location = 4) in vec4 model_src_rect;
-            layout(location = 5) in float model_rotation;
-            uniform mat4 projection;
-
-            out vec2 vert;
-            out vec2 tex_coord;
-            out vec4 frag_color;
-
-            void main() {
-                vert = verts[gl_VertexID % 6] * model_scale + vertex_dummy * model_rotation + model_offset;
-                // TODO: Double-check these UV's are correct
-                tex_coord = uvs[gl_VertexID] * model_src_rect.zw + model_src_rect.xy;
-                frag_color = model_color;
-                gl_Position = vec4(vert, 0.0, 1.0) * projection;
-            }"#;
-        let fragment_shader_source = r#"precision mediump float;
-            in vec2 vert;
-            in vec2 tex_coord;
-            in vec4 frag_color;
-            uniform sampler2D tex;
-
-            layout(location=0) out vec4 color;
-
-            void main() {
-                // Useful for looking at UV values
-                //color = vec4(tex_coord, 0.5, 1.0);
-
-                color = texture(tex, tex_coord) * frag_color;
-            }"#;
         Shader::new(
             &ctx,
-            vertex_shader_source,
-            fragment_shader_source,
+            VERTEX_SHADER_SOURCE,
+            FRAGMENT_SHADER_SOURCE,
             &ctx.shader_version,
         )
     }
