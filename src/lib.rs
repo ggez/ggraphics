@@ -1,5 +1,5 @@
 // Next up:
-// Make projection better, make rotation work, rename 'offset' to 'dest' and add a rotation offset
+// Make projection better, rename 'offset' to 'dest' and add a rotation offset
 // multiple pipelines, diff. shaders and stuff,
 // Try out triangle strips?  idk, vertices don't seem much a bottleneck.  We could easily make
 // primitive type part of a DrawCall...
@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem;
+use std::rc::Rc;
 use std::time::Duration;
 
 use bytemuck;
@@ -29,11 +30,6 @@ type GlFramebuffer = <Context as glow::HasContext>::Framebuffer;
 type GlRenderbuffer = <Context as glow::HasContext>::Renderbuffer;
 type GlBuffer = <Context as glow::HasContext>::Buffer;
 type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
-
-/// TODO: Figure out what to do with this, and whether it can work on wasm.
-/// For now though, Rc is fine.
-type Rc<T> = std::rc::Rc<T>;
-//type Rc<T> = std::sync::Arc<T>;
 
 /// A type that contains all the STUFF we need for displaying graphics
 /// and handling events on both desktop and web.
@@ -88,8 +84,8 @@ const VERTEX_SHADER_SOURCE: &str = include_str!("data/quad.vert.glsl");
 const FRAGMENT_SHADER_SOURCE: &str = include_str!("data/quad.frag.glsl");
 
 impl GlContext {
-    fn default_shader(ctx: &GlContext) -> Shader {
-        Shader::new(&ctx, VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE)
+    fn default_shader(ctx: &GlContext) -> ShaderHandle {
+        ShaderHandle::new(&ctx, VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE)
     }
 
     pub fn new(gl: glow::Context) -> Self {
@@ -101,7 +97,6 @@ impl GlContext {
             let lulz = oorandom::Rand32::new(314159);
             let mut s = GlContext {
                 gl: Rc::new(gl),
-                //pipelines: vec![],
                 passes: vec![],
                 samplers: HashMap::new(),
                 lulz,
@@ -117,8 +112,7 @@ impl GlContext {
                     let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
                     let (w, h) = image_rgba.dimensions();
                     let image_rgba_bytes = image_rgba.into_raw();
-                    //make_texture(&gl, &image_rgba_bytes, w as usize, h as usize)
-                    Texture::new(&s, &image_rgba_bytes, w as usize, h as usize).into_shared()
+                    TextureHandle::new(&s, &image_rgba_bytes, w as usize, h as usize).into_shared()
                 };
                 let drawcall =
                     QuadDrawCall::new(&mut s, texture, SamplerSpec::default(), &pipeline.shader);
@@ -177,7 +171,8 @@ impl GlContext {
 
     pub fn get_sampler(&mut self, spec: &SamplerSpec) -> GlSampler {
         let gl = &*self.gl;
-        // TODO: Audit unsafe
+        // unsafety: This takes no inputs besides spec, which has
+        // constrained types.
         *self.samplers.entry(*spec).or_insert_with(|| unsafe {
             let sampler = gl.create_sampler().unwrap();
             gl.sampler_parameter_i32(
@@ -197,7 +192,7 @@ impl GlContext {
     }
 
     pub fn draw(&mut self) {
-        // This will be safe if pipeline.draw() is
+        // unsafety: This will be safe if pipeline.draw() is
         unsafe {
             self.gl
                 .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
@@ -258,18 +253,15 @@ impl GlContext {
     }
 }
 
-/// TODO: This is actually not safe to Clone, we'd have to Rc the GlTexture.
-/// Which is fine, but then inconvenient for other things maybe.
-/// Think about it.
+/// This is actually not safe to Clone, we'd have to Rc the GlTexture.
+/// Having the Rc on the *outside* of this type is what we actually want.
 #[derive(Debug)]
-pub struct Texture {
+pub struct TextureHandle {
     ctx: Rc<glow::Context>,
     tex: GlTexture,
 }
 
-pub type SharedTexture = Rc<Texture>;
-
-impl Drop for Texture {
+impl Drop for TextureHandle {
     fn drop(&mut self) {
         unsafe {
             self.ctx.delete_texture(self.tex);
@@ -277,7 +269,9 @@ impl Drop for Texture {
     }
 }
 
-impl Texture {
+pub type Texture = Rc<TextureHandle>;
+
+impl TextureHandle {
     pub fn new(ctx: &GlContext, rgba: &[u8], width: usize, height: usize) -> Self {
         assert_eq!(width * height * 4, rgba.len());
         let gl = &*ctx.gl;
@@ -340,17 +334,19 @@ impl Texture {
         }
     }
 
-    pub fn into_shared(self) -> SharedTexture {
+    pub fn into_shared(self) -> Texture {
         Rc::new(self)
     }
 }
 
-pub struct Shader {
+/// Similar to `TextureHandle`, this
+/// is a shader resource that can be Rc'ed and shared.
+pub struct ShaderHandle {
     ctx: Rc<glow::Context>,
     program: GlProgram,
 }
 
-impl Drop for Shader {
+impl Drop for ShaderHandle {
     fn drop(&mut self) {
         unsafe {
             self.ctx.delete_program(self.program);
@@ -358,8 +354,10 @@ impl Drop for Shader {
     }
 }
 
-impl Shader {
-    pub fn new(ctx: &GlContext, vertex_src: &str, fragment_src: &str) -> Shader {
+pub type Shader = Rc<ShaderHandle>;
+
+impl ShaderHandle {
+    pub fn new(ctx: &GlContext, vertex_src: &str, fragment_src: &str) -> ShaderHandle {
         let gl = &*ctx.gl;
         let shader_sources = [
             (glow::VERTEX_SHADER, vertex_src),
@@ -396,7 +394,7 @@ impl Shader {
             // TODO:
             // By default only one output so this isn't necessary
             // glBindFragDataLocation(shaderProgram, 0, "outColor");
-            Shader {
+            ShaderHandle {
                 ctx: ctx.gl.clone(),
                 program,
             }
@@ -562,7 +560,7 @@ impl Default for SamplerSpec {
 
 pub struct QuadDrawCall {
     ctx: Rc<glow::Context>,
-    texture: SharedTexture,
+    texture: Texture,
     sampler: GlSampler,
     instances: Vec<QuadData>,
     vbo: GlBuffer,
@@ -589,7 +587,7 @@ impl Drop for QuadDrawCall {
 }
 
 impl QuadDrawCall {
-    unsafe fn set_vertex_pointers(ctx: &GlContext, shader: &Shader) {
+    unsafe fn set_vertex_pointers(ctx: &GlContext, shader: &ShaderHandle) {
         let gl = &*ctx.gl;
         let layout = QuadData::layout();
         for (name, offset, size) in layout {
@@ -612,9 +610,9 @@ impl QuadDrawCall {
 
     fn new(
         ctx: &mut GlContext,
-        texture: SharedTexture,
+        texture: Texture,
         sampler: SamplerSpec,
-        shader: &Shader,
+        shader: &ShaderHandle,
     ) -> Self {
         let sampler = ctx.get_sampler(&sampler);
         let gl = &*ctx.gl;
@@ -757,13 +755,13 @@ impl QuadDrawCall {
 
 pub struct QuadPipeline {
     drawcalls: Vec<QuadDrawCall>,
-    shader: Shader,
+    shader: ShaderHandle,
     projection: Mat4,
     projection_location: GlUniformLocation,
 }
 
 impl QuadPipeline {
-    unsafe fn new(ctx: &GlContext, shader: Shader) -> Self {
+    unsafe fn new(ctx: &GlContext, shader: ShaderHandle) -> Self {
         let gl = &*ctx.gl;
         //let projection = Mat4::identity();
         let projection = ortho_mat(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0);
@@ -794,7 +792,7 @@ impl QuadPipeline {
 pub struct TextureRenderTarget {
     ctx: Rc<glow::Context>,
     output_framebuffer: GlFramebuffer,
-    output_texture: SharedTexture,
+    output_texture: Texture,
     _output_depthbuffer: GlRenderbuffer,
 }
 
@@ -812,8 +810,8 @@ impl TextureRenderTarget {
     unsafe fn new(ctx: &GlContext, width: usize, height: usize) -> Self {
         let gl = &*ctx.gl;
 
-        let t =
-            Texture::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height).into_shared();
+        let t = TextureHandle::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height)
+            .into_shared();
         let depth = gl.create_renderbuffer().unwrap();
         let fb = gl.create_framebuffer().unwrap();
 
@@ -948,7 +946,7 @@ impl RenderPass {
     }
 
     /// Get the texture this render pass outputs to, if any.
-    fn get_texture(&self) -> Option<SharedTexture> {
+    fn get_texture(&self) -> Option<Texture> {
         match &self.target {
             RenderTarget::Screen => None,
             RenderTarget::Texture(trt) => Some(trt.output_texture.clone()),

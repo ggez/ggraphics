@@ -7,6 +7,7 @@ Currently, this is essentially an implmentation detail of
 used as a general-purpose thing, but other people may be interested
 in it (ie, other people making 2D games or game engines in Rust)
 but want to otherwise make different design decisions than `ggez` does.
+So, here it is.
 
 # Design
 
