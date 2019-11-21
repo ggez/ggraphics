@@ -14,7 +14,7 @@ opt-level = "s"
 [dependencies]
 image = {version = "0.22", default-features=false, features=["jpeg", "png_codec", "pnm", "tiff", "webp", "bmp", "hdr", "dxt"] }
 log = "0.4"
-bytemuck = "0.1"
+bytemuck = "1"
 #euclid = "0.20"
 #vek = "0.9"
 glam = "0.8"

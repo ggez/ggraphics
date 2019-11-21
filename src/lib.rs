@@ -4,7 +4,9 @@
 // Try out triangle strips?  idk, vertices don't seem much a bottleneck.  We could easily make
 // primitive type part of a DrawCall...
 // Resize viewport properly -- also needed for render passes
-// Lib quality stuff -- deny no docs, vet public API, etc
+// Lib quality stuff -- deny no docs, vet public API, audit unsafes, figure out what can be safe,
+// impl traits (and warn no impls)
+// Particle example!
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
