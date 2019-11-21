@@ -698,12 +698,13 @@ impl QuadDrawCall {
         let g = rand.rand_float();
         let b = rand.rand_float();
         let a = 1.0;
+        let rot = rand.rand_float();
         let quad = QuadData {
             offset: [x, y],
             color: [r, g, b, a],
             scale: [1.2, 1.2],
             src_rect: [0.0, 0.0, 1.0, 1.0],
-            rotation: 0.0,
+            rotation: rot * std::f32::consts::PI * 2.0,
         };
         self.add(quad);
     }

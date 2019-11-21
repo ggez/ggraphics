@@ -36,7 +36,11 @@ out vec2 tex_coord;
 out vec4 frag_color;
 
 void main() {
-    vert = verts[gl_VertexID % 6] * model_scale + vertex_dummy * model_rotation + model_offset;
+    mat2 rotation = mat2(
+            cos(model_rotation), -sin(model_rotation),
+            sin(model_rotation), cos(model_rotation)
+    );
+    vert = verts[gl_VertexID % 6] * rotation * model_scale + vertex_dummy + model_offset;
     // TODO: Double-check these UV's are correct
     tex_coord = uvs[gl_VertexID] * model_src_rect.zw + model_src_rect.xy;
     frag_color = model_color;

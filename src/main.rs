@@ -8,8 +8,6 @@ use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 fn run_wasm() {
-    //use console_error_panic_hook;
-    //use web_sys;
     use glow::HasRenderLoop;
     use std::time::Duration;
 
