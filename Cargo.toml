@@ -23,8 +23,8 @@ oorandom = "11"
 pretty_env_logger = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-glow = {version = "0.3.0-alpha4", default-features=false, features=["glutin"]}
-glutin = "0.22.0-alpha3"
+glow = {version = "0.3.0-alpha4", default-features=false}
+glutin = "0.22.0-alpha5"
 
 
 #[target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -33,7 +33,8 @@ glutin = "0.22.0-alpha3"
 #webgl_stdweb = { version = "0.3" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-glow = {version = "0.3.0-alpha3", default-features=false, features=["web-sys"]}
+glow = {version = "0.3.0-alpha4", default-features=false, features=["web-sys"]}
 web_sys = { version = "0.3", package = "web-sys", features=["console"] }
 wasm-bindgen = { version = "0.2" }
 console_error_panic_hook = "0.1"
+winit = {version = "0.20.0-alpha4", features=["web-sys"]}

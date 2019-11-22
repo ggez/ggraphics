@@ -107,6 +107,7 @@ fn run_wasm() {
 
     console_error_panic_hook::set_once();
     // CONTEXT CREATION
+    /*
     let (gl, render_loop) = {
         use wasm_bindgen::JsCast;
         let canvas = web_sys::window()
@@ -144,6 +145,64 @@ fn run_wasm() {
         if !*running {
             // Drop context, deleting its contents.
             state = None;
+        }
+    });
+    */
+    use winit::event::{Event, WindowEvent};
+    use winit::event_loop::ControlFlow;
+    use winit::platform::web::WindowExtWebSys;
+    let event_loop = winit::event_loop::EventLoop::new();
+    let win = winit::window::WindowBuilder::new()
+        .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
+        .with_title("Heckin' winit")
+        .build(&event_loop)
+        .unwrap();
+
+    let document = web_sys::window()
+        .expect("Failed to obtain window")
+        .document()
+        .expect("Failed to obtain document");
+
+    // Shove winit's canvas into the document
+    document
+        .body()
+        .expect("Failed to obtain body")
+        .append_child(&win.canvas())
+        .unwrap();
+
+    // Wire winit's context into glow
+    let gl = {
+        use wasm_bindgen::JsCast;
+        let webgl2_context = win
+            .canvas()
+            .get_context("webgl2")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<web_sys::WebGl2RenderingContext>()
+            .unwrap();
+        glow::Context::from_webgl2_context(webgl2_context)
+    };
+    let mut state = GameState::new(gl);
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        match event {
+            Event::EventsCleared => {
+                state.update(Duration::from_millis(10));
+                win.request_redraw();
+            }
+            Event::WindowEvent { ref event, .. } => match event {
+                WindowEvent::RedrawRequested => {
+                    //state.update(Duration::from_millis(10));
+                    state.ctx.draw();
+                    //win.request_redraw();
+                }
+                WindowEvent::CursorMoved { ref position, .. } => {
+                    let ev = wasm_bindgen::JsValue::from_str(&format!("Mouse at {:?}", position));
+                    web_sys::console::log_1(&ev);
+                }
+                _ => (),
+            },
+            _ => (),
         }
     });
 }
