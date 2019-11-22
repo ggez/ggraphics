@@ -41,6 +41,7 @@ pub struct GlContext {
     /// them separately, you just ask for the one you want and it gives
     /// it to you.
     samplers: HashMap<SamplerSpec, GlSampler>,
+    quad_shader: Shader,
 }
 
 fn ortho(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> [[f32; 4]; 4] {
@@ -80,8 +81,8 @@ const VERTEX_SHADER_SOURCE: &str = include_str!("data/quad.vert.glsl");
 const FRAGMENT_SHADER_SOURCE: &str = include_str!("data/quad.frag.glsl");
 
 impl GlContext {
-    pub fn default_shader(ctx: &GlContext) -> ShaderHandle {
-        ShaderHandle::new(&ctx, VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE)
+    pub fn default_shader(&self) -> Shader {
+        self.quad_shader.clone()
     }
 
     pub fn new(gl: glow::Context) -> Self {
@@ -89,10 +90,14 @@ impl GlContext {
         unsafe {
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+            let gl = Rc::new(gl);
+            let quad_shader =
+                ShaderHandle::new(gl.clone(), VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE);
             let s = GlContext {
-                gl: Rc::new(gl),
+                gl,
                 passes: vec![],
                 samplers: HashMap::new(),
+                quad_shader: Rc::new(quad_shader),
             };
             s.register_debug_callback();
 
@@ -158,7 +163,7 @@ impl GlContext {
     }
 
     pub fn draw(&mut self) {
-        // unsafety: This will be safe if pipeline.draw() is
+        // unsafety: This will be safe if RenderPass::draw() is
         unsafe {
             for pass in self.passes.iter_mut() {
                 pass.draw(&self.gl);
@@ -284,8 +289,7 @@ impl Drop for ShaderHandle {
 pub type Shader = Rc<ShaderHandle>;
 
 impl ShaderHandle {
-    pub fn new(ctx: &GlContext, vertex_src: &str, fragment_src: &str) -> ShaderHandle {
-        let gl = &*ctx.gl;
+    fn new(gl: Rc<glow::Context>, vertex_src: &str, fragment_src: &str) -> ShaderHandle {
         let shader_sources = [
             (glow::VERTEX_SHADER, vertex_src),
             (glow::FRAGMENT_SHADER, fragment_src),
@@ -321,40 +325,9 @@ impl ShaderHandle {
             // TODO:
             // By default only one output so this isn't necessary
             // glBindFragDataLocation(shaderProgram, 0, "outColor");
-            ShaderHandle {
-                ctx: ctx.gl.clone(),
-                program,
-            }
+            ShaderHandle { ctx: gl, program }
         }
     }
-}
-
-/// Input to an instance
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct DrawParam {
-    /// TODO: euclid, vek, or what?  UGH.
-    /// Hek glam is pretty good
-    pub dest: [f32; 2],
-    //pub dest: Point2,
-    /*
-    /// A portion of the drawable to clip, as a fraction of the whole image.
-    /// Defaults to the whole image `(0,0 to 1,1)` if omitted.
-    pub src: Rect,
-    /// The position to draw the graphic expressed as a `Point2`.
-    pub dest: mint::Point2<f32>,
-    /// The orientation of the graphic in radians.
-    pub rotation: f32,
-    /// The x/y scale factors expressed as a `Vector2`.
-    pub scale: mint::Vector2<f32>,
-    /// An offset from the center for transform operations like scale/rotation,
-    /// with `0,0` meaning the origin and `1,1` meaning the opposite corner from the origin.
-    /// By default these operations are done from the top-left corner, so to rotate something
-    /// from the center specify `Point2::new(0.5, 0.5)` here.
-    pub offset: mint::Point2<f32>,
-    /// A color to draw the target with.
-    /// Default: white.
-    pub color: Color,
-    */
 }
 
 /// Data we need for each quad instance.
@@ -683,13 +656,13 @@ impl QuadDrawCall {
 
 pub struct QuadPipeline {
     pub drawcalls: Vec<QuadDrawCall>,
-    shader: ShaderHandle,
+    shader: Shader,
     pub projection: Mat4,
     projection_location: GlUniformLocation,
 }
 
 impl QuadPipeline {
-    pub unsafe fn new(ctx: &GlContext, shader: ShaderHandle) -> Self {
+    pub unsafe fn new(ctx: &GlContext, shader: Shader) -> Self {
         let gl = &*ctx.gl;
         //let projection = Mat4::identity();
         let projection = ortho_mat(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0);
