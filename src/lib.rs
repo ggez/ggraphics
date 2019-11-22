@@ -12,12 +12,10 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem;
 use std::rc::Rc;
-use std::time::Duration;
 
 use bytemuck;
 use glam::Mat4;
 use glow::*;
-use image;
 use log::*;
 
 // Shortcuts for various OpenGL types.
@@ -36,15 +34,13 @@ type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
 /// Anything it contains is specialized to the correct type via cfg flags
 /// at compile time, rather than trying to use generics or such.
 pub struct GlContext {
-    gl: Rc<glow::Context>,
-    passes: Vec<RenderPass>,
+    pub gl: Rc<glow::Context>,
+    pub passes: Vec<RenderPass>,
     /// Samplers are cached and managed entirely by the GlContext.
     /// You usually only need a few of them so there's no point freeing
     /// them separately, you just ask for the one you want and it gives
     /// it to you.
     samplers: HashMap<SamplerSpec, GlSampler>,
-
-    lulz: oorandom::Rand32,
 }
 
 fn ortho(left: f32, right: f32, top: f32, bottom: f32, far: f32, near: f32) -> [[f32; 4]; 4] {
@@ -84,7 +80,7 @@ const VERTEX_SHADER_SOURCE: &str = include_str!("data/quad.vert.glsl");
 const FRAGMENT_SHADER_SOURCE: &str = include_str!("data/quad.frag.glsl");
 
 impl GlContext {
-    fn default_shader(ctx: &GlContext) -> ShaderHandle {
+    pub fn default_shader(ctx: &GlContext) -> ShaderHandle {
         ShaderHandle::new(&ctx, VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE)
     }
 
@@ -94,42 +90,13 @@ impl GlContext {
             gl.clear_color(0.1, 0.2, 0.3, 1.0);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
-            let lulz = oorandom::Rand32::new(314159);
-            let mut s = GlContext {
+            let s = GlContext {
                 gl: Rc::new(gl),
                 passes: vec![],
                 samplers: HashMap::new(),
-                lulz,
             };
             s.register_debug_callback();
 
-            {
-                let mut pass1 = RenderPass::new(&mut s, 800, 600);
-                let shader = Self::default_shader(&s);
-                let mut pipeline = QuadPipeline::new(&s, shader);
-                let texture = {
-                    let image_bytes = include_bytes!("data/wabbit_alpha.png");
-                    let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
-                    let (w, h) = image_rgba.dimensions();
-                    let image_rgba_bytes = image_rgba.into_raw();
-                    TextureHandle::new(&s, &image_rgba_bytes, w as usize, h as usize).into_shared()
-                };
-                let drawcall =
-                    QuadDrawCall::new(&mut s, texture, SamplerSpec::default(), &pipeline.shader);
-                pipeline.drawcalls.push(drawcall);
-                pass1.pipelines.push(pipeline);
-                let texture2 = pass1.get_texture().unwrap();
-                s.passes.push(pass1);
-
-                let mut pass2 = RenderPass::new_screen(&mut s, 800, 600);
-                let shader = Self::default_shader(&s);
-                let mut pipeline = QuadPipeline::new(&s, shader);
-                let drawcall =
-                    QuadDrawCall::new(&mut s, texture2, SamplerSpec::default(), &pipeline.shader);
-                pipeline.drawcalls.push(drawcall);
-                pass2.pipelines.push(pipeline);
-                s.passes.push(pass2);
-            }
             s
         }
     }
@@ -200,43 +167,6 @@ impl GlContext {
                 pass.draw(&self.gl);
             }
         }
-    }
-
-    pub fn update(&mut self, frametime: Duration) -> usize {
-        // This adds more quads as long as our frame doesn't take too long
-        // We max out at 17 ms per frame; this method of measurement
-        // is pretty imprecise and there will be jitter, but it should
-        // be okay for order-of-magnitude.
-        let mut total_instances = 0;
-        if frametime.as_secs_f64() < 0.017 {
-            // Render our bunnies to a texture
-            {
-                let pass1 = &mut self.passes[0];
-                for pipeline in pass1.pipelines.iter_mut() {
-                    for drawcall in pipeline.drawcalls.iter_mut() {
-                        for _ in 0..1 {
-                            drawcall.add_random(&mut self.lulz);
-                        }
-                        total_instances += drawcall.instances.len();
-                    }
-                }
-            }
-
-            // Render that texture to screen, only a few times
-            {
-                let pass2 = &mut self.passes[1];
-                // yes I know the numbers make you cry
-                // i drink your tears :D
-                for pipeline in pass2.pipelines.iter_mut() {
-                    for drawcall in pipeline.drawcalls.iter_mut() {
-                        if drawcall.instances.len() < 4 {
-                            drawcall.add_random(&mut self.lulz);
-                        }
-                    }
-                }
-            }
-        }
-        total_instances
     }
 
     /// Returns OpenGL version info.
@@ -562,7 +492,7 @@ pub struct QuadDrawCall {
     ctx: Rc<glow::Context>,
     texture: Texture,
     sampler: GlSampler,
-    instances: Vec<QuadData>,
+    pub instances: Vec<QuadData>,
     vbo: GlBuffer,
     vao: GlVertexArray,
     instance_vbo: GlBuffer,
@@ -607,11 +537,11 @@ impl QuadDrawCall {
         }
     }
 
-    fn new(
+    pub fn new(
         ctx: &mut GlContext,
         texture: Texture,
         sampler: SamplerSpec,
-        shader: &ShaderHandle,
+        pipeline: &QuadPipeline,
     ) -> Self {
         let sampler = ctx.get_sampler(&sampler);
         let gl = &*ctx.gl;
@@ -630,7 +560,7 @@ impl QuadDrawCall {
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
             let dummy_attrib = gl
-                .get_attrib_location(shader.program, "vertex_dummy")
+                .get_attrib_location(pipeline.shader.program, "vertex_dummy")
                 .unwrap();
             gl.vertex_attrib_pointer_f32(
                 dummy_attrib,
@@ -662,10 +592,12 @@ impl QuadDrawCall {
             // Now create another VBO containing per-instance data
             let instance_vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
-            Self::set_vertex_pointers(ctx, shader);
+            Self::set_vertex_pointers(ctx, &pipeline.shader);
 
             // We can't define locations for uniforms, yet.
-            let texture_location = gl.get_uniform_location(shader.program, "tex").unwrap();
+            let texture_location = gl
+                .get_uniform_location(pipeline.shader.program, "tex")
+                .unwrap();
 
             gl.bind_vertex_array(None);
 
@@ -688,7 +620,7 @@ impl QuadDrawCall {
         self.instances.push(quad);
     }
 
-    fn add_random(&mut self, rand: &mut oorandom::Rand32) {
+    pub fn add_random(&mut self, rand: &mut oorandom::Rand32) {
         let x = rand.rand_float() * 2.0 - 1.0;
         let y = rand.rand_float() * 2.0 - 1.0;
         let r = rand.rand_float();
@@ -753,14 +685,14 @@ impl QuadDrawCall {
 }
 
 pub struct QuadPipeline {
-    drawcalls: Vec<QuadDrawCall>,
+    pub drawcalls: Vec<QuadDrawCall>,
     shader: ShaderHandle,
-    projection: Mat4,
+    pub projection: Mat4,
     projection_location: GlUniformLocation,
 }
 
 impl QuadPipeline {
-    unsafe fn new(ctx: &GlContext, shader: ShaderHandle) -> Self {
+    pub unsafe fn new(ctx: &GlContext, shader: ShaderHandle) -> Self {
         let gl = &*ctx.gl;
         //let projection = Mat4::identity();
         let projection = ortho_mat(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0);
@@ -775,7 +707,7 @@ impl QuadPipeline {
         }
     }
 
-    unsafe fn draw(&mut self, gl: &Context) {
+    pub unsafe fn draw(&mut self, gl: &Context) {
         gl.use_program(Some(self.shader.program));
         gl.uniform_matrix_4_f32_slice(
             Some(self.projection_location),
@@ -806,7 +738,7 @@ impl Drop for TextureRenderTarget {
 
 impl TextureRenderTarget {
     /// Create a new render target rendering to a texture.
-    unsafe fn new(ctx: &GlContext, width: usize, height: usize) -> Self {
+    pub unsafe fn new(ctx: &GlContext, width: usize, height: usize) -> Self {
         let gl = &*ctx.gl;
 
         let t = TextureHandle::new_empty(ctx, glow::RGBA, glow::UNSIGNED_BYTE, width, height)
@@ -917,11 +849,11 @@ impl RenderTarget {
 /// TODO: Clear color should be part of this.
 pub struct RenderPass {
     target: RenderTarget,
-    pipelines: Vec<QuadPipeline>,
+    pub pipelines: Vec<QuadPipeline>,
 }
 
 impl RenderPass {
-    unsafe fn new(ctx: &mut GlContext, width: usize, height: usize) -> Self {
+    pub unsafe fn new(ctx: &mut GlContext, width: usize, height: usize) -> Self {
         let target = RenderTarget::new_target(ctx, width, height);
 
         Self {
@@ -930,7 +862,7 @@ impl RenderPass {
         }
     }
 
-    unsafe fn new_screen(_ctx: &mut GlContext, _width: usize, _height: usize) -> Self {
+    pub unsafe fn new_screen(_ctx: &mut GlContext, _width: usize, _height: usize) -> Self {
         Self {
             target: RenderTarget::Screen,
             pipelines: vec![],
@@ -945,7 +877,7 @@ impl RenderPass {
     }
 
     /// Get the texture this render pass outputs to, if any.
-    fn get_texture(&self) -> Option<Texture> {
+    pub fn get_texture(&self) -> Option<Texture> {
         match &self.target {
             RenderTarget::Screen => None,
             RenderTarget::Texture(trt) => Some(trt.output_texture.clone()),

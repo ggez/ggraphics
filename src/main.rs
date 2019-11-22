@@ -2,6 +2,86 @@
 // env RUST_LOG=info cargo run
 
 use ggraphics::*;
+use glow;
+use oorandom;
+
+use std::time::Duration;
+
+struct GameState {
+    ctx: GlContext,
+    lulz: oorandom::Rand32,
+}
+
+impl GameState {
+    pub fn new(gl: glow::Context) -> Self {
+        let mut ctx = GlContext::new(gl);
+        unsafe {
+            let mut pass1 = RenderPass::new(&mut ctx, 800, 600);
+            let shader = GlContext::default_shader(&ctx);
+            let mut pipeline = QuadPipeline::new(&ctx, shader);
+            let texture = {
+                let image_bytes = include_bytes!("data/wabbit_alpha.png");
+                let image_rgba = image::load_from_memory(image_bytes).unwrap().to_rgba();
+                let (w, h) = image_rgba.dimensions();
+                let image_rgba_bytes = image_rgba.into_raw();
+                TextureHandle::new(&ctx, &image_rgba_bytes, w as usize, h as usize).into_shared()
+            };
+            let drawcall = QuadDrawCall::new(&mut ctx, texture, SamplerSpec::default(), &pipeline);
+            pipeline.drawcalls.push(drawcall);
+            pass1.pipelines.push(pipeline);
+            let texture2 = pass1.get_texture().unwrap();
+            ctx.passes.push(pass1);
+
+            let mut pass2 = RenderPass::new_screen(&mut ctx, 800, 600);
+            let shader = GlContext::default_shader(&ctx);
+            let mut pipeline = QuadPipeline::new(&ctx, shader);
+            let drawcall = QuadDrawCall::new(&mut ctx, texture2, SamplerSpec::default(), &pipeline);
+            pipeline.drawcalls.push(drawcall);
+            pass2.pipelines.push(pipeline);
+            ctx.passes.push(pass2);
+        }
+
+        let lulz = oorandom::Rand32::new(12345);
+        Self { ctx, lulz }
+    }
+
+    pub fn update(&mut self, frametime: Duration) -> usize {
+        // This adds more quads as long as our frame doesn't take too long
+        // We max out at 17 ms per frame; this method of measurement
+        // is pretty imprecise and there will be jitter, but it should
+        // be okay for order-of-magnitude.
+        let mut total_instances = 0;
+        if frametime.as_secs_f64() < 0.017 {
+            // Render our bunnies to a texture
+            {
+                let pass1 = &mut self.ctx.passes[0];
+                for pipeline in pass1.pipelines.iter_mut() {
+                    for drawcall in pipeline.drawcalls.iter_mut() {
+                        for _ in 0..1 {
+                            drawcall.add_random(&mut self.lulz);
+                        }
+                        total_instances += drawcall.instances.len();
+                    }
+                }
+            }
+
+            // Render that texture to screen, only a few times
+            {
+                let pass2 = &mut self.ctx.passes[1];
+                // yes I know the numbers make you cry
+                // i drink your tears :D
+                for pipeline in pass2.pipelines.iter_mut() {
+                    for drawcall in pipeline.drawcalls.iter_mut() {
+                        if drawcall.instances.len() < 4 {
+                            drawcall.add_random(&mut self.lulz);
+                        }
+                    }
+                }
+            }
+        }
+        total_instances
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -9,7 +89,6 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 fn run_wasm() {
     use glow::HasRenderLoop;
-    use std::time::Duration;
 
     console_error_panic_hook::set_once();
     // CONTEXT CREATION
@@ -36,20 +115,20 @@ fn run_wasm() {
     };
 
     // GL SETUP
-    let mut ctx = Some(GlContext::new(gl));
+    let mut state = Some(GameState::new(gl));
 
     // RENDER LOOP
     render_loop.run(move |running: &mut bool| {
-        if let Some(ictx) = &mut ctx {
+        if let Some(s) = &mut state {
             // web-sys has no Instant so we just have
             // to give it a dummy frame duration
-            ictx.update(Duration::from_millis(10));
-            ictx.draw();
+            s.update(Duration::from_millis(10));
+            s.ctx.draw();
         }
 
         if !*running {
             // Drop context, deleting its contents.
-            ctx = None;
+            state = None;
         }
     });
 }
@@ -86,8 +165,9 @@ fn run_glutin() {
         trace!("Window created");
 
         // GL SETUP
-        let mut ctx = GlContext::new(gl);
-        let (vend, rend, vers, shader_vers) = ctx.get_info();
+
+        let mut state = GameState::new(gl);
+        let (vend, rend, vers, shader_vers) = state.ctx.get_info();
         info!(
             "GL context created.
   Vendor: {}
@@ -115,7 +195,7 @@ fn run_glutin() {
                     Event::EventsCleared => {
                         let now = Instant::now();
                         let dt = now - loop_time;
-                        let num_objects = ctx.update(dt);
+                        let num_objects = state.update(dt);
                         loop_time = now;
 
                         frames += 1;
@@ -133,7 +213,7 @@ fn run_glutin() {
                             windowed_context.resize(logical_size.to_physical(dpi_factor));
                         }
                         WindowEvent::RedrawRequested => {
-                            ctx.draw();
+                            state.ctx.draw();
                             windowed_context.swap_buffers().unwrap();
                         }
                         WindowEvent::CloseRequested => {
