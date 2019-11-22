@@ -87,7 +87,6 @@ impl GlContext {
     pub fn new(gl: glow::Context) -> Self {
         // GL SETUP
         unsafe {
-            gl.clear_color(0.1, 0.2, 0.3, 1.0);
             gl.enable(glow::BLEND);
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             let s = GlContext {
@@ -161,8 +160,6 @@ impl GlContext {
     pub fn draw(&mut self) {
         // unsafety: This will be safe if pipeline.draw() is
         unsafe {
-            self.gl
-                .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
             for pass in self.passes.iter_mut() {
                 pass.draw(&self.gl);
             }
@@ -367,11 +364,11 @@ pub struct DrawParam {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
-    offset: [f32; 2],
-    scale: [f32; 2],
-    color: [f32; 4],
-    src_rect: [f32; 4],
-    rotation: f32,
+    pub offset: [f32; 2],
+    pub scale: [f32; 2],
+    pub color: [f32; 4],
+    pub src_rect: [f32; 4],
+    pub rotation: f32,
 }
 
 unsafe impl bytemuck::Zeroable for QuadData {}
@@ -379,11 +376,11 @@ unsafe impl bytemuck::Zeroable for QuadData {}
 unsafe impl bytemuck::Pod for QuadData {}
 
 impl QuadData {
-    const fn empty() -> Self {
+    pub const fn empty() -> Self {
         QuadData {
             offset: [0.0, 0.0],
-            color: [0.0, 0.0, 0.0, 0.0],
-            scale: [0.0, 0.0],
+            color: [1.0, 1.0, 1.0, 1.0],
+            scale: [1.0, 1.0],
             src_rect: [0.0, 0.0, 1.0, 1.0],
             rotation: 0.0,
         }
@@ -500,7 +497,7 @@ pub struct QuadDrawCall {
     /// Whether or not the instances have changed
     /// compared to what the VBO contains, so we can
     /// only upload to the VBO on changes
-    dirty: bool,
+    pub dirty: bool,
 }
 
 impl Drop for QuadDrawCall {
@@ -631,7 +628,7 @@ impl QuadDrawCall {
         let quad = QuadData {
             offset: [x, y],
             color: [r, g, b, a],
-            scale: [1.2, 1.2],
+            scale: [0.2, 0.2],
             src_rect: [0.0, 0.0, 1.0, 1.0],
             rotation: rot * std::f32::consts::PI * 2.0,
         };
@@ -849,28 +846,45 @@ impl RenderTarget {
 /// TODO: Clear color should be part of this.
 pub struct RenderPass {
     target: RenderTarget,
+    clear_color: (f32, f32, f32, f32),
     pub pipelines: Vec<QuadPipeline>,
 }
 
 impl RenderPass {
-    pub unsafe fn new(ctx: &mut GlContext, width: usize, height: usize) -> Self {
+    pub unsafe fn new(
+        ctx: &mut GlContext,
+        width: usize,
+        height: usize,
+        clear_color: (f32, f32, f32, f32),
+    ) -> Self {
         let target = RenderTarget::new_target(ctx, width, height);
 
         Self {
             target,
             pipelines: vec![],
+            clear_color,
         }
     }
 
-    pub unsafe fn new_screen(_ctx: &mut GlContext, _width: usize, _height: usize) -> Self {
+    pub unsafe fn new_screen(
+        _ctx: &mut GlContext,
+        _width: usize,
+        _height: usize,
+        clear_color: (f32, f32, f32, f32),
+    ) -> Self {
         Self {
             target: RenderTarget::Screen,
             pipelines: vec![],
+            clear_color,
         }
     }
 
     unsafe fn draw(&mut self, gl: &Context) {
         self.target.bind(gl);
+        let (r, g, b, a) = self.clear_color;
+        // TODO: Does this need to be set every time, or does it stick to the target binding?
+        gl.clear_color(r, g, b, a);
+        gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
         for pipeline in self.pipelines.iter_mut() {
             pipeline.draw(gl);
         }

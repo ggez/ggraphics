@@ -16,7 +16,8 @@ impl GameState {
     pub fn new(gl: glow::Context) -> Self {
         let mut ctx = GlContext::new(gl);
         unsafe {
-            let mut pass1 = RenderPass::new(&mut ctx, 800, 600);
+            // Render our bunnies to a texture
+            let mut pass1 = RenderPass::new(&mut ctx, 800, 600, (0.1, 0.2, 0.3, 1.0));
             let shader = GlContext::default_shader(&ctx);
             let mut pipeline = QuadPipeline::new(&ctx, shader);
             let texture = {
@@ -32,13 +33,35 @@ impl GameState {
             let texture2 = pass1.get_texture().unwrap();
             ctx.passes.push(pass1);
 
-            let mut pass2 = RenderPass::new_screen(&mut ctx, 800, 600);
+            // Render that texture to the screen
+            let mut pass2 = RenderPass::new_screen(&mut ctx, 800, 600, (0.6, 0.6, 0.6, 1.0));
             let shader = GlContext::default_shader(&ctx);
             let mut pipeline = QuadPipeline::new(&ctx, shader);
             let drawcall = QuadDrawCall::new(&mut ctx, texture2, SamplerSpec::default(), &pipeline);
             pipeline.drawcalls.push(drawcall);
             pass2.pipelines.push(pipeline);
             ctx.passes.push(pass2);
+        }
+
+        {
+            let pass2 = &mut ctx.passes[1];
+            // yes I know the numbers make you cry
+            // i drink your tears :D
+            for pipeline in pass2.pipelines.iter_mut() {
+                for drawcall in pipeline.drawcalls.iter_mut() {
+                    for i in 0..10 {
+                        let offset = (i as f32) * 0.2 - 1.0;
+                        let quad = QuadData {
+                            offset: [-offset, -offset],
+                            color: [1.0, 1.0, 1.0, 1.0],
+                            scale: [0.5, 0.5],
+                            src_rect: [0.0, 0.0, 1.0, 1.0],
+                            rotation: 0.0,
+                        };
+                        drawcall.add(quad)
+                    }
+                }
+            }
         }
 
         let lulz = oorandom::Rand32::new(12345);
@@ -52,7 +75,6 @@ impl GameState {
         // be okay for order-of-magnitude.
         let mut total_instances = 0;
         if frametime.as_secs_f64() < 0.017 {
-            // Render our bunnies to a texture
             {
                 let pass1 = &mut self.ctx.passes[0];
                 for pipeline in pass1.pipelines.iter_mut() {
@@ -63,20 +85,13 @@ impl GameState {
                         total_instances += drawcall.instances.len();
                     }
                 }
-            }
 
-            // Render that texture to screen, only a few times
-            {
-                let pass2 = &mut self.ctx.passes[1];
-                // yes I know the numbers make you cry
-                // i drink your tears :D
-                for pipeline in pass2.pipelines.iter_mut() {
-                    for drawcall in pipeline.drawcalls.iter_mut() {
-                        if drawcall.instances.len() < 4 {
-                            drawcall.add_random(&mut self.lulz);
-                        }
-                    }
+                let drawcall2 = &mut self.ctx.passes[1].pipelines[0].drawcalls[0];
+                for instance in drawcall2.instances.iter_mut() {
+                    instance.rotation += 0.02;
                 }
+                // TODO: Make this API not suck.
+                drawcall2.dirty = true;
             }
         }
         total_instances
