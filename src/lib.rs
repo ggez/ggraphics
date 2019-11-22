@@ -593,8 +593,7 @@ impl QuadDrawCall {
         for (name, offset, size) in layout {
             info!("Layout: {} offset, {} size", offset, size);
             let element_size = mem::size_of::<f32>();
-            let attrib_location =
-                u32::try_from(gl.get_attrib_location(shader.program, name)).unwrap();
+            let attrib_location = gl.get_attrib_location(shader.program, name).unwrap();
             gl.vertex_attrib_pointer_f32(
                 attrib_location,
                 (size / element_size) as i32,
@@ -630,9 +629,9 @@ impl QuadDrawCall {
             let vbo = gl.create_buffer().unwrap();
             gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
 
-            // https://github.com/grovesNL/glow/issues/54
-            let dummy_attrib =
-                u32::try_from(gl.get_attrib_location(shader.program, "vertex_dummy")).unwrap();
+            let dummy_attrib = gl
+                .get_attrib_location(shader.program, "vertex_dummy")
+                .unwrap();
             gl.vertex_attrib_pointer_f32(
                 dummy_attrib,
                 2,

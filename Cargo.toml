@@ -23,7 +23,7 @@ oorandom = "11"
 pretty_env_logger = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-glow = {version = "0.3.0-alpha3", default-features=false, features=["glutin"]}
+glow = {version = "0.3.0-alpha4", default-features=false, features=["glutin"]}
 glutin = "0.22.0-alpha3"
 
 
