@@ -337,10 +337,10 @@ impl ShaderHandle {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
-    pub offset: [f32; 2],
-    pub scale: [f32; 2],
     pub color: [f32; 4],
     pub src_rect: [f32; 4],
+    pub dst_rect: [f32; 4],
+    pub offset: [f32; 2],
     pub rotation: f32,
 }
 
@@ -353,8 +353,8 @@ impl QuadData {
         QuadData {
             offset: [0.0, 0.0],
             color: [1.0, 1.0, 1.0, 1.0],
-            scale: [1.0, 1.0],
             src_rect: [0.0, 0.0, 1.0, 1.0],
+            dst_rect: [0.0, 0.0, 1.0, 1.0],
             rotation: 0.0,
         }
     }
@@ -376,11 +376,11 @@ impl QuadData {
         let color_offset = (&thing.color as *const [f32; 4] as usize) - thing_base as usize;
         let color_size = mem::size_of_val(&thing.color);
 
-        let scale_offset = (&thing.scale as *const [f32; 2] as usize) - thing_base as usize;
-        let scale_size = mem::size_of_val(&thing.scale);
-
         let src_rect_offset = (&thing.src_rect as *const [f32; 4] as usize) - thing_base as usize;
         let src_rect_size = mem::size_of_val(&thing.src_rect);
+
+        let dst_rect_offset = (&thing.dst_rect as *const [f32; 4] as usize) - thing_base as usize;
+        let dst_rect_size = mem::size_of_val(&thing.dst_rect);
 
         let rotation_offset = (&thing.rotation as *const f32 as usize) - thing_base as usize;
         let rotation_size = mem::size_of_val(&thing.rotation);
@@ -388,8 +388,8 @@ impl QuadData {
         vec![
             ("model_offset", offset_offset, offset_size),
             ("model_color", color_offset, color_size),
-            ("model_scale", scale_offset, scale_size),
             ("model_src_rect", src_rect_offset, src_rect_size),
+            ("model_dst_rect", dst_rect_offset, dst_rect_size),
             ("model_rotation", rotation_offset, rotation_size),
         ]
     }
@@ -599,10 +599,10 @@ impl QuadDrawCall {
         let a = 1.0;
         let rot = rand.rand_float();
         let quad = QuadData {
-            offset: [x, y],
+            offset: [0.5, 0.5],
             color: [r, g, b, a],
-            scale: [0.2, 0.2],
             src_rect: [0.0, 0.0, 1.0, 1.0],
+            dst_rect: [x, y, x + 1.0, y + 1.0],
             rotation: rot * std::f32::consts::PI * 2.0,
         };
         self.add(quad);

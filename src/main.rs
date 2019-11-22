@@ -52,10 +52,10 @@ impl GameState {
                     for i in 0..10 {
                         let offset = (i as f32) * 0.2 - 1.0;
                         let quad = QuadData {
-                            offset: [-offset, -offset],
+                            offset: [0.0, 0.0],
                             color: [1.0, 1.0, 1.0, 1.0],
-                            scale: [0.5, 0.5],
                             src_rect: [0.0, 0.0, 1.0, 1.0],
+                            dst_rect: [-offset, -offset, 0.5, 0.5],
                             rotation: 0.0,
                         };
                         drawcall.add(quad)
