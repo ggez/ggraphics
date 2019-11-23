@@ -4,6 +4,7 @@
 use ggraphics::*;
 use glow;
 use oorandom;
+use winit;
 
 use std::time::Duration;
 
@@ -98,6 +99,100 @@ impl GameState {
     }
 }
 
+trait Window {
+    fn request_redraw(&self);
+    fn swap_buffers(&self);
+}
+
+/// Used for desktop
+#[cfg(not(target_arch = "wasm32"))]
+impl Window for glutin::WindowedContext<glutin::PossiblyCurrent> {
+    fn request_redraw(&self) {
+        self.window().request_redraw();
+    }
+    fn swap_buffers(&self) {
+        self.swap_buffers().unwrap();
+    }
+}
+
+/// Used for wasm
+impl Window for winit::window::Window {
+    fn request_redraw(&self) {
+        self.request_redraw();
+    }
+    fn swap_buffers(&self) {}
+}
+
+fn mainloop(
+    gl: glow::Context,
+    event_loop: winit::event_loop::EventLoop<()>,
+    window: impl Window + 'static,
+) {
+    use instant::Instant;
+    use log::*;
+    use winit::event::{Event, WindowEvent};
+    use winit::event_loop::ControlFlow;
+    let mut state = GameState::new(gl);
+    let (vend, rend, vers, shader_vers) = state.ctx.get_info();
+    info!(
+        "GL context created.
+  Vendor: {}
+  Renderer: {}
+  Version: {}
+  Shader version: {}",
+        vend, rend, vers, shader_vers
+    );
+
+    // EVENT LOOP
+    {
+        let mut frames = 0;
+        let mut loop_time = Instant::now();
+
+        event_loop.run(move |event, _, control_flow| {
+            *control_flow = ControlFlow::Poll;
+            match event {
+                Event::LoopDestroyed => {
+                    info!("Event::LoopDestroyed!");
+                    return;
+                }
+                Event::EventsCleared => {
+                    let now = Instant::now();
+                    let dt = now - loop_time;
+                    let num_objects = state.update(dt);
+                    loop_time = now;
+
+                    frames += 1;
+                    const FRAMES: u32 = 100;
+                    if frames % FRAMES == 0 {
+                        let fps = 1.0 / dt.as_secs_f64();
+                        info!("{} objects, {:.03} fps", num_objects, fps);
+                    }
+                    window.request_redraw();
+                }
+                Event::WindowEvent { ref event, .. } => match event {
+                    WindowEvent::Resized(logical_size) => {
+                        info!("WindowEvent::Resized: {:?}", logical_size);
+                        //let dpi_factor = windowed_context.window().hidpi_factor();
+                        //windowed_context.resize(logical_size.to_physical(dpi_factor));
+                    }
+                    WindowEvent::RedrawRequested => {
+                        state.ctx.draw();
+                        window.swap_buffers();
+                    }
+                    WindowEvent::CloseRequested => {
+                        info!("WindowEvent::CloseRequested");
+                        // Don't need to drop Context explicitly,
+                        // it'll happen when we exit.
+                        *control_flow = ControlFlow::Exit
+                    }
+                    _ => (),
+                },
+                _ => (),
+            }
+        });
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -141,38 +236,12 @@ fn run_wasm() {
             .unwrap();
         glow::Context::from_webgl2_context(webgl2_context)
     };
-    let mut state = GameState::new(gl);
-    let mut loop_time = Instant::now();
-    event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Poll;
-        match event {
-            Event::EventsCleared => {
-                let now = Instant::now();
-                let dt = now - loop_time;
-                let num_objects = state.update(dt);
-                loop_time = now;
-                win.request_redraw();
-            }
-            Event::WindowEvent { ref event, .. } => match event {
-                WindowEvent::RedrawRequested => {
-                    //state.update(Duration::from_millis(10));
-                    state.ctx.draw();
-                    //win.request_redraw();
-                }
-                WindowEvent::CursorMoved { ref position, .. } => {
-                    let ev = wasm_bindgen::JsValue::from_str(&format!("Mouse at {:?}", position));
-                    web_sys::console::log_1(&ev);
-                }
-                _ => (),
-            },
-            _ => (),
-        }
-    });
+
+    mainloop(gl, event_loop, win);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_glutin() {
-    use instant::Instant;
     use log::*;
     pretty_env_logger::init();
     // CONTEXT CREATION
@@ -202,69 +271,7 @@ fn run_glutin() {
         trace!("Window created");
 
         // GL SETUP
-
-        let mut state = GameState::new(gl);
-        let (vend, rend, vers, shader_vers) = state.ctx.get_info();
-        info!(
-            "GL context created.
-  Vendor: {}
-  Renderer: {}
-  Version: {}
-  Shader version: {}",
-            vend, rend, vers, shader_vers
-        );
-
-        // EVENT LOOP
-        {
-            use glutin::event::{Event, WindowEvent};
-            use glutin::event_loop::ControlFlow;
-
-            let mut frames = 0;
-            let mut loop_time = Instant::now();
-
-            event_loop.run(move |event, _, control_flow| {
-                *control_flow = ControlFlow::Poll;
-                match event {
-                    Event::LoopDestroyed => {
-                        info!("Event::LoopDestroyed!");
-                        return;
-                    }
-                    Event::EventsCleared => {
-                        let now = Instant::now();
-                        let dt = now - loop_time;
-                        let num_objects = state.update(dt);
-                        loop_time = now;
-
-                        frames += 1;
-                        const FRAMES: u32 = 100;
-                        if frames % FRAMES == 0 {
-                            let fps = 1.0 / dt.as_secs_f64();
-                            info!("{} objects, {:.03} fps", num_objects, fps);
-                        }
-                        windowed_context.window().request_redraw();
-                    }
-                    Event::WindowEvent { ref event, .. } => match event {
-                        WindowEvent::Resized(logical_size) => {
-                            info!("WindowEvent::Resized: {:?}", logical_size);
-                            let dpi_factor = windowed_context.window().hidpi_factor();
-                            windowed_context.resize(logical_size.to_physical(dpi_factor));
-                        }
-                        WindowEvent::RedrawRequested => {
-                            state.ctx.draw();
-                            windowed_context.swap_buffers().unwrap();
-                        }
-                        WindowEvent::CloseRequested => {
-                            info!("WindowEvent::CloseRequested");
-                            // Don't need to drop Context explicitly,
-                            // it'll happen when we exit.
-                            *control_flow = ControlFlow::Exit
-                        }
-                        _ => (),
-                    },
-                    _ => (),
-                }
-            });
-        }
+        mainloop(gl, event_loop, windowed_context);
     }
 }
 
