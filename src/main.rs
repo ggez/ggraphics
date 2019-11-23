@@ -146,10 +146,12 @@ fn mainloop(
     // EVENT LOOP
     {
         let mut frames = 0;
-        let mut loop_time = Instant::now();
+        let target_dt = Duration::from_micros(16_660);
+        let mut last_frame = Instant::now();
+        let mut next_frame = last_frame + target_dt;
 
         event_loop.run(move |event, _, control_flow| {
-            *control_flow = ControlFlow::Poll;
+            *control_flow = ControlFlow::WaitUntil(next_frame);
             match event {
                 Event::LoopDestroyed => {
                     info!("Event::LoopDestroyed!");
@@ -157,17 +159,21 @@ fn mainloop(
                 }
                 Event::EventsCleared => {
                     let now = Instant::now();
-                    let dt = now - loop_time;
-                    let num_objects = state.update(dt);
-                    loop_time = now;
+                    let dt = now - last_frame;
+                    if dt >= target_dt {
+                        let num_objects = state.update(dt);
+                        last_frame = now;
+                        next_frame = now + target_dt;
 
-                    frames += 1;
-                    const FRAMES: u32 = 100;
-                    if frames % FRAMES == 0 {
-                        let fps = 1.0 / dt.as_secs_f64();
-                        info!("{} objects, {:.03} fps", num_objects, fps);
+
+                        frames += 1;
+                        const FRAMES: u32 = 100;
+                        if frames % FRAMES == 0 {
+                            let fps = 1.0 / dt.as_secs_f64();
+                            info!("{} objects, {:.03} fps", num_objects, fps);
+                        }
+                        window.request_redraw();
                     }
-                    window.request_redraw();
                 }
                 Event::WindowEvent { ref event, .. } => match event {
                     WindowEvent::Resized(logical_size) => {
