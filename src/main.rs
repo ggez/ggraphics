@@ -18,7 +18,7 @@ impl GameState {
         let mut ctx = GlContext::new(gl);
         unsafe {
             // Render our bunnies to a texture
-            let mut pass1 = RenderPass::new(&mut ctx, 800, 600, (0.1, 0.2, 0.3, 1.0));
+            let mut pass1 = RenderPass::new(&mut ctx, 1024, 768, (0.1, 0.2, 0.3, 1.0));
             let shader = GlContext::default_shader(&ctx);
             let mut pipeline = QuadPipeline::new(&ctx, shader);
             let texture = {
@@ -35,7 +35,7 @@ impl GameState {
             ctx.passes.push(pass1);
 
             // Render that texture to the screen
-            let mut pass2 = RenderPass::new_screen(&mut ctx, 800, 600, (0.6, 0.6, 0.6, 1.0));
+            let mut pass2 = RenderPass::new_screen(&mut ctx, 1024, 768, (0.6, 0.6, 0.6, 1.0));
             let shader = GlContext::default_shader(&ctx);
             let mut pipeline = QuadPipeline::new(&ctx, shader);
             let drawcall = QuadDrawCall::new(&mut ctx, texture2, SamplerSpec::default(), &pipeline);
@@ -122,8 +122,10 @@ impl Window for winit::window::Window {
         self.request_redraw();
     }
     fn swap_buffers(&self) {
+        /*
         let msg = format!("swapped buffers");
         web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&msg));
+        */
     }
 }
 
@@ -150,12 +152,13 @@ fn mainloop(
     // EVENT LOOP
     {
         let mut frames = 0;
-        let target_dt = Duration::from_micros(16_660);
+        let target_dt = Duration::from_micros(10_000);
         let mut last_frame = Instant::now();
         let mut next_frame = last_frame + target_dt;
 
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::WaitUntil(next_frame);
+            //*control_flow = ControlFlow::Poll;
             match event {
                 Event::LoopDestroyed => {
                     info!("Event::LoopDestroyed!");
@@ -166,11 +169,13 @@ fn mainloop(
                     let now = Instant::now();
                     let dt = now - last_frame;
                     if dt >= target_dt {
+                        /*
                         #[cfg(target_arch = "wasm32")]
                         {
                             let msg = format!("Events cleared: {:?}, target: {:?}", dt, target_dt);
                             web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&msg));
                         }
+                        */
                         let num_objects = state.update(dt);
                         last_frame = now;
                         next_frame = now + target_dt;
