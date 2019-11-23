@@ -116,11 +116,15 @@ impl Window for glutin::WindowedContext<glutin::PossiblyCurrent> {
 }
 
 /// Used for wasm
+#[cfg(target_arch = "wasm32")]
 impl Window for winit::window::Window {
     fn request_redraw(&self) {
         self.request_redraw();
     }
-    fn swap_buffers(&self) {}
+    fn swap_buffers(&self) {
+        let msg = format!("swapped buffers");
+        web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&msg));
+    }
 }
 
 fn mainloop(
@@ -158,13 +162,18 @@ fn mainloop(
                     return;
                 }
                 Event::EventsCleared => {
+                    println!("Events cleared");
                     let now = Instant::now();
                     let dt = now - last_frame;
                     if dt >= target_dt {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            let msg = format!("Events cleared: {:?}, target: {:?}", dt, target_dt);
+                            web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&msg));
+                        }
                         let num_objects = state.update(dt);
                         last_frame = now;
                         next_frame = now + target_dt;
-
 
                         frames += 1;
                         const FRAMES: u32 = 100;
