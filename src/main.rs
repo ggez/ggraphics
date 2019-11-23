@@ -104,50 +104,9 @@ use wasm_bindgen::prelude::*;
 #[cfg(target_arch = "wasm32")]
 fn run_wasm() {
     use glow::HasRenderLoop;
+    use instant::Instant;
 
     console_error_panic_hook::set_once();
-    // CONTEXT CREATION
-    /*
-    let (gl, render_loop) = {
-        use wasm_bindgen::JsCast;
-        let canvas = web_sys::window()
-            .unwrap()
-            .document()
-            .unwrap()
-            .get_element_by_id("canvas")
-            .unwrap()
-            .dyn_into::<web_sys::HtmlCanvasElement>()
-            .unwrap();
-        let webgl2_context = canvas
-            .get_context("webgl2")
-            .unwrap()
-            .unwrap()
-            .dyn_into::<web_sys::WebGl2RenderingContext>()
-            .unwrap();
-        (
-            glow::Context::from_webgl2_context(webgl2_context),
-            glow::RenderLoop::from_request_animation_frame(),
-        )
-    };
-
-    // GL SETUP
-    let mut state = Some(GameState::new(gl));
-
-    // RENDER LOOP
-    render_loop.run(move |running: &mut bool| {
-        if let Some(s) = &mut state {
-            // web-sys has no Instant so we just have
-            // to give it a dummy frame duration
-            s.update(Duration::from_millis(10));
-            s.ctx.draw();
-        }
-
-        if !*running {
-            // Drop context, deleting its contents.
-            state = None;
-        }
-    });
-    */
     use winit::event::{Event, WindowEvent};
     use winit::event_loop::ControlFlow;
     use winit::platform::web::WindowExtWebSys;
@@ -183,11 +142,15 @@ fn run_wasm() {
         glow::Context::from_webgl2_context(webgl2_context)
     };
     let mut state = GameState::new(gl);
+    let mut loop_time = Instant::now();
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        *control_flow = ControlFlow::Poll;
         match event {
             Event::EventsCleared => {
-                state.update(Duration::from_millis(10));
+                let now = Instant::now();
+                let dt = now - loop_time;
+                let num_objects = state.update(dt);
+                loop_time = now;
                 win.request_redraw();
             }
             Event::WindowEvent { ref event, .. } => match event {
@@ -209,8 +172,8 @@ fn run_wasm() {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn run_glutin() {
+    use instant::Instant;
     use log::*;
-    use std::time::Instant;
     pretty_env_logger::init();
     // CONTEXT CREATION
     unsafe {
