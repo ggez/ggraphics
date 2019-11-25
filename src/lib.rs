@@ -1,9 +1,28 @@
+//! A basic rendering library designed to run on desktop and in
+//! web browsers.  Uses the `glow` crate for OpenGL, WebGL and
+//! OpenGL ES.
+//!
+//! For now, this is mostly an implementation detail of the `ggez`
+//! crate.
+//!
+//! Note this is deliberately NOT thread-safe, because threaded
+//! OpenGL is not worth the trouble.  Create your OpenGL context
+//! on a particular thread and do all your rendering from that
+//! thread.
+//! See
+//! <https://github.com/FNA-XNA/FNA/blob/76554b7ca3d7aa33229c12c6ab5bf3dbdb114d59/src/FNAPlatform/OpenGLDevice.cs#L10-L39> for more info
+
 // Next up:
 // multiple pipelines, diff. shaders and stuff,
-// Resize viewport properly -- also needed for render passes
 // Lib quality stuff -- deny no docs, vet public API, audit unsafes, figure out what can be safe,
 // impl traits (and warn no impls)
 // Particle example!
+
+#![deny(missing_docs)]
+#![deny(missing_debug_implementations)]
+#![deny(unused_results)]
+#![warn(bare_trait_objects)]
+#![warn(missing_copy_implementations)]
 
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -30,8 +49,11 @@ type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
 /// and handling events on both desktop and web.
 /// Anything it contains is specialized to the correct type via cfg flags
 /// at compile time, rather than trying to use generics or such.
+#[derive(Debug)]
 pub struct GlContext {
+    /// The OpenGL context.
     pub gl: Rc<glow::Context>,
+    /// The list of render passes.
     pub passes: Vec<RenderPass>,
     /// Samplers are cached and managed entirely by the GlContext.
     /// You usually only need a few of them so there's no point freeing
@@ -78,10 +100,13 @@ const VERTEX_SHADER_SOURCE: &str = include_str!("data/quad.vert.glsl");
 const FRAGMENT_SHADER_SOURCE: &str = include_str!("data/quad.frag.glsl");
 
 impl GlContext {
+    /// Get a copy of the default quad shader.
     pub fn default_shader(&self) -> Shader {
         self.quad_shader.clone()
     }
 
+    /// Create a new `GlContext` from the given `glow::Context`.  Does
+    /// basic setup and state setting.
     pub fn new(gl: glow::Context) -> Self {
         // GL SETUP
         unsafe {
@@ -137,6 +162,9 @@ impl GlContext {
         }
     }
 
+    /// Get a sampler given the given spec.  Samplers are cached, and
+    /// usually few in number, so you shouldn't free them and this handles
+    /// caching them for you.
     pub fn get_sampler(&mut self, spec: &SamplerSpec) -> GlSampler {
         let gl = &*self.gl;
         // unsafety: This takes no inputs besides spec, which has
@@ -159,6 +187,7 @@ impl GlContext {
         })
     }
 
+    /// Draw all contained render passes, in order.
     pub fn draw(&mut self) {
         // unsafety: This will be safe if RenderPass::draw() is
         unsafe {
@@ -215,9 +244,11 @@ impl Drop for TextureHandle {
     }
 }
 
+/// A shared, clone-able texture type.
 pub type Texture = Rc<TextureHandle>;
 
 impl TextureHandle {
+    /// Create a new texture from the given slice of RGBA bytes.
     pub fn new(ctx: &GlContext, rgba: &[u8], width: usize, height: usize) -> Self {
         assert_eq!(width * height * 4, rgba.len());
         let gl = &*ctx.gl;
@@ -280,6 +311,7 @@ impl TextureHandle {
         }
     }
 
+    /// Turn this texture into a share-able, refcounted one.
     pub fn into_shared(self) -> Texture {
         Rc::new(self)
     }
@@ -287,6 +319,7 @@ impl TextureHandle {
 
 /// Similar to `TextureHandle`, this
 /// is a shader resource that can be Rc'ed and shared.
+#[derive(Debug)]
 pub struct ShaderHandle {
     ctx: Rc<glow::Context>,
     program: GlProgram,
@@ -300,6 +333,7 @@ impl Drop for ShaderHandle {
     }
 }
 
+/// A share-able refcounted shader.
 pub type Shader = Rc<ShaderHandle>;
 
 impl ShaderHandle {
@@ -351,10 +385,17 @@ impl ShaderHandle {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
 pub struct QuadData {
+    /// Color to blend the result texture with.
     pub color: [f32; 4],
+    /// Source region on the texture to draw, coordinates range from 0 to 1
     pub src_rect: [f32; 4],
+    /// Destination rectangle in your render target to draw the texture on,
+    /// coordinates are whatever you set in your transform and viewport.
     pub dst_rect: [f32; 4],
+    /// Rotation offset -- A point within your `dst_rect` to rotate around,
+    /// coordinates range from 0 to 1
     pub offset: [f32; 2],
+    /// Rotation, in radians, CCW.
     pub rotation: f32,
 }
 
@@ -363,6 +404,7 @@ unsafe impl bytemuck::Zeroable for QuadData {}
 unsafe impl bytemuck::Pod for QuadData {}
 
 impl QuadData {
+    /// Returns an empty `QuadData` with default values.
     pub const fn empty() -> Self {
         QuadData {
             offset: [0.0, 0.0],
@@ -410,11 +452,11 @@ impl QuadData {
 }
 
 /// Filter modes a sampler may have.
-///
-/// TODO: Fill this out as necessary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FilterMode {
+    /// Nearest-neighbor filtering.  Use this for pixel-y effects.
     Nearest,
+    /// Linear filtering.  Use this for smooth effects.
     Linear,
 }
 
@@ -431,8 +473,11 @@ impl FilterMode {
 /// Wrap modes a sampler may have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum WrapMode {
+    /// Clamp colors to the edge of the texture.
     Clamp,
+    /// Tile/repeat the texture.
     Tile,
+    /// Mirror the texture.
     Mirror,
 }
 
@@ -457,6 +502,7 @@ pub struct SamplerSpec {
 }
 
 impl SamplerSpec {
+    /// Shortcut for creating a new `SamplerSpec`.
     pub fn new(min: FilterMode, mag: FilterMode, wrap: WrapMode) -> Self {
         Self {
             min_filter: min,
@@ -472,10 +518,15 @@ impl Default for SamplerSpec {
     }
 }
 
+/// A list of quads that will be drawn in one draw call.
+/// Each uses the same texture, same mesh (built in to the quad shader),
+/// and may have different `QuadData` inputs.
+#[derive(Debug)]
 pub struct QuadDrawCall {
     ctx: Rc<glow::Context>,
     texture: Texture,
     sampler: GlSampler,
+    /// The instances that will be drawn.
     pub instances: Vec<QuadData>,
     vbo: GlBuffer,
     vao: GlVertexArray,
@@ -521,6 +572,7 @@ impl QuadDrawCall {
         }
     }
 
+    /// New empty `QuadDrawCall` using the given pipeline.
     pub fn new(
         ctx: &mut GlContext,
         texture: Texture,
@@ -599,11 +651,20 @@ impl QuadDrawCall {
         }
     }
 
+    /// Add a new instance to the quad data.
+    /// Instances are cached between `draw()` invocations.
     pub fn add(&mut self, quad: QuadData) {
         self.dirty = true;
         self.instances.push(quad);
     }
 
+    /// Empty all instances out of the instance buffer.
+    pub fn clear(&mut self) {
+        self.dirty = true;
+        self.instances.clear();
+    }
+
+    /// Add a random quad.  Useful for testing.
     pub fn add_random(&mut self, rand: &mut oorandom::Rand32) {
         let x = rand.rand_float() * 2.0 - 1.0;
         let y = rand.rand_float() * 2.0 - 1.0;
@@ -668,14 +729,19 @@ impl QuadDrawCall {
     }
 }
 
+/// A pipeline for drawing quads.
+#[derive(Debug)]
 pub struct QuadPipeline {
+    /// The draw calls in the pipeline.
     pub drawcalls: Vec<QuadDrawCall>,
     shader: Shader,
+    /// The projection the pipeline will draw with.
     pub projection: Mat4,
     projection_location: GlUniformLocation,
 }
 
 impl QuadPipeline {
+    /// Create new pipeline with the given shader.
     pub unsafe fn new(ctx: &GlContext, shader: Shader) -> Self {
         let gl = &*ctx.gl;
         //let projection = Mat4::identity();
@@ -691,6 +757,7 @@ impl QuadPipeline {
         }
     }
 
+    /// Draw all the draw calls in the pipeline.
     pub unsafe fn draw(&mut self, gl: &Context) {
         gl.use_program(Some(self.shader.program));
         gl.uniform_matrix_4_f32_slice(
@@ -704,6 +771,8 @@ impl QuadPipeline {
     }
 }
 
+/// A render target for drawing to a texture.
+#[derive(Debug)]
 pub struct TextureRenderTarget {
     ctx: Rc<glow::Context>,
     output_framebuffer: GlFramebuffer,
@@ -797,8 +866,11 @@ impl TextureRenderTarget {
 }
 
 /// The options for what a render pass can write to.
+#[derive(Debug)]
 pub enum RenderTarget {
+    /// A render target rendering to a texture.
     Texture(TextureRenderTarget),
+    /// A render target rendering to the screen's buffer.
     Screen,
 }
 
@@ -829,14 +901,17 @@ impl RenderTarget {
 /// Currently, no input framebuffers or such.
 /// We're not actually intending to reproduce Rendy's Graph type here.
 /// This may eventually feed into a bounce buffer or such though.
+#[derive(Debug)]
 pub struct RenderPass {
     target: RenderTarget,
     clear_color: (f32, f32, f32, f32),
     viewport: (i32, i32, i32, i32),
+    /// The pipelines to draw in the render pass.
     pub pipelines: Vec<QuadPipeline>,
 }
 
 impl RenderPass {
+    /// Make a new render pass rendering to a texture.
     pub unsafe fn new(
         ctx: &mut GlContext,
         width: usize,
@@ -853,6 +928,7 @@ impl RenderPass {
         }
     }
 
+    /// Create a new rnder pass rendering to the screen.
     pub unsafe fn new_screen(
         _ctx: &mut GlContext,
         width: usize,
