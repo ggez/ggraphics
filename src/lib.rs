@@ -1,8 +1,5 @@
 // Next up:
-// Make projection better, rename 'offset' to 'dest' and add a rotation offset
 // multiple pipelines, diff. shaders and stuff,
-// Try out triangle strips?  idk, vertices don't seem much a bottleneck.  We could easily make
-// primitive type part of a DrawCall...
 // Resize viewport properly -- also needed for render passes
 // Lib quality stuff -- deny no docs, vet public API, audit unsafes, figure out what can be safe,
 // impl traits (and warn no impls)
@@ -181,6 +178,23 @@ impl GlContext {
             let glsl_vers = self.gl.get_parameter_string(glow::SHADING_LANGUAGE_VERSION);
 
             (vendor, rend, vers, glsl_vers)
+        }
+    }
+
+    /// Sets the viewport for the final render-to-screen pass.
+    /// Negative numbers are valid, see `glViewport` for the
+    /// math behind it.
+    ///
+    /// Panics if there is no such render pass.
+    pub fn set_screen_viewport(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        let pass = self
+            .passes
+            .last_mut()
+            .expect("set_screen_viewport() requires a render pass to function on");
+        if let RenderTarget::Screen = pass.target {
+            pass.set_viewport(x, y, w, h);
+        } else {
+            panic!("Last render pass is not rendering to screen, aiee!");
         }
     }
 }
@@ -815,11 +829,10 @@ impl RenderTarget {
 /// Currently, no input framebuffers or such.
 /// We're not actually intending to reproduce Rendy's Graph type here.
 /// This may eventually feed into a bounce buffer or such though.
-///
-/// TODO: Clear color should be part of this.
 pub struct RenderPass {
     target: RenderTarget,
     clear_color: (f32, f32, f32, f32),
+    viewport: (i32, i32, i32, i32),
     pub pipelines: Vec<QuadPipeline>,
 }
 
@@ -835,19 +848,21 @@ impl RenderPass {
         Self {
             target,
             pipelines: vec![],
+            viewport: (0, 0, width as i32, height as i32),
             clear_color,
         }
     }
 
     pub unsafe fn new_screen(
         _ctx: &mut GlContext,
-        _width: usize,
-        _height: usize,
+        width: usize,
+        height: usize,
         clear_color: (f32, f32, f32, f32),
     ) -> Self {
         Self {
             target: RenderTarget::Screen,
             pipelines: vec![],
+            viewport: (0, 0, width as i32, height as i32),
             clear_color,
         }
     }
@@ -855,7 +870,9 @@ impl RenderPass {
     unsafe fn draw(&mut self, gl: &Context) {
         self.target.bind(gl);
         let (r, g, b, a) = self.clear_color;
+        let (x, y, w, h) = self.viewport;
         // TODO: Does this need to be set every time, or does it stick to the target binding?
+        gl.viewport(x, y, w, h);
         gl.clear_color(r, g, b, a);
         gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
         for pipeline in self.pipelines.iter_mut() {
@@ -869,5 +886,11 @@ impl RenderPass {
             RenderTarget::Screen => None,
             RenderTarget::Texture(trt) => Some(trt.output_texture.clone()),
         }
+    }
+
+    /// Sets the viewport for the render pass.  Negative numbers are valid,
+    /// see `glViewport` for the math involved.
+    pub fn set_viewport(&mut self, x: i32, y: i32, w: i32, h: i32) {
+        self.viewport = (x, y, w, h);
     }
 }

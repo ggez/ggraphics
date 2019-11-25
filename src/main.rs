@@ -18,7 +18,7 @@ impl GameState {
         let mut ctx = GlContext::new(gl);
         unsafe {
             // Render our bunnies to a texture
-            let mut pass1 = RenderPass::new(&mut ctx, 1024, 768, (0.1, 0.2, 0.3, 1.0));
+            let mut pass1 = RenderPass::new(&mut ctx, 800, 600, (0.1, 0.2, 0.3, 1.0));
             let shader = GlContext::default_shader(&ctx);
             let mut pipeline = QuadPipeline::new(&ctx, shader);
             let texture = {
@@ -35,7 +35,7 @@ impl GameState {
             ctx.passes.push(pass1);
 
             // Render that texture to the screen
-            let mut pass2 = RenderPass::new_screen(&mut ctx, 1024, 768, (0.6, 0.6, 0.6, 1.0));
+            let mut pass2 = RenderPass::new_screen(&mut ctx, 800, 600, (0.6, 0.6, 0.6, 1.0));
             let shader = GlContext::default_shader(&ctx);
             let mut pipeline = QuadPipeline::new(&ctx, shader);
             let drawcall = QuadDrawCall::new(&mut ctx, texture2, SamplerSpec::default(), &pipeline);
@@ -193,6 +193,14 @@ fn mainloop(
                     WindowEvent::Resized(logical_size) => {
                         info!("WindowEvent::Resized: {:?}", logical_size);
                         //let dpi_factor = windowed_context.window().hidpi_factor();
+                        let dpi_factor = 1.0;
+                        let physical_size = logical_size.to_physical(dpi_factor);
+                        state.ctx.set_screen_viewport(
+                            0,
+                            0,
+                            physical_size.width as i32,
+                            physical_size.height as i32,
+                        );
                         //windowed_context.resize(logical_size.to_physical(dpi_factor));
                     }
                     WindowEvent::RedrawRequested => {
@@ -227,7 +235,7 @@ fn run_wasm() {
     use winit::platform::web::WindowExtWebSys;
     let event_loop = winit::event_loop::EventLoop::new();
     let win = winit::window::WindowBuilder::new()
-        .with_inner_size(winit::dpi::LogicalSize::new(1024.0, 768.0))
+        .with_inner_size(winit::dpi::LogicalSize::new(800.0, 600.0))
         .with_title("Heckin' winit")
         .build(&event_loop)
         .unwrap();
@@ -271,7 +279,7 @@ fn run_glutin() {
             let el = glutin::event_loop::EventLoop::new();
             let wb = glutin::window::WindowBuilder::new()
                 .with_title("Hello triangle!")
-                .with_inner_size(glutin::dpi::LogicalSize::new(1024.0, 768.0));
+                .with_inner_size(glutin::dpi::LogicalSize::new(800.0, 600.0));
             let windowed_context = glutin::ContextBuilder::new()
                 //.with_gl(glutin::GlRequest::Latest)
                 .with_gl(glutin::GlRequest::GlThenGles {
