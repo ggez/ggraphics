@@ -40,9 +40,16 @@ void main() {
             cos(model_rotation), -sin(model_rotation),
             sin(model_rotation), cos(model_rotation)
     );
-    vert = verts[gl_VertexID % 6] *
-        model_dst_rect.zw + model_dst_rect.xy
+    vec2 offset_inverse = -model_offset;
+    vec2 scale = model_dst_rect.zw;
+    vec2 dest_point = model_dst_rect.xy;
+    vert = (verts[gl_VertexID % 6] + offset_inverse) * scale * rotation
+        + model_offset + dest_point + vertex_dummy;
+    /*
+    vert = verts[gl_VertexID % 6]
+        * model_dst_rect.zw + model_dst_rect.xy
         * rotation + vertex_dummy + model_offset;
+        */
     // TODO: Double-check these UV's are correct
     tex_coord = uvs[gl_VertexID] * model_src_rect.zw + model_src_rect.xy;
     frag_color = model_color;
