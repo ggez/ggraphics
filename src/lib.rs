@@ -13,13 +13,15 @@
 //! <https://github.com/FNA-XNA/FNA/blob/76554b7ca3d7aa33229c12c6ab5bf3dbdb114d59/src/FNAPlatform/OpenGLDevice.cs#L10-L39> for more info
 
 // Next up:
-// multiple pipelines, diff. shaders and stuff,
-// Lib quality stuff -- deny no docs, vet public API, audit unsafes, figure out what can be safe,
-// impl traits (and warn no impls)
-// Particle example!
+// Mesh pipelines?  Diff shaders?  Try out termhn's wireframe shader with barycentric coords?
+// audit unsafes, figure out what can be safe,
+// Ponder how to improve the API.
+//  * Build DrawCall's from Pipelines, and Pipelines from Passes?
+//  * Mesh drawcall's and passes?  Common traits for them?
+//  * Just start tossing it into ggez and see what happens?
 
 #![deny(missing_docs)]
-#![deny(missing_debug_implementations)]
+//#![deny(missing_debug_implementations)]
 #![deny(unused_results)]
 #![warn(bare_trait_objects)]
 #![warn(missing_copy_implementations)]
@@ -49,7 +51,6 @@ type GlUniformLocation = <Context as glow::HasContext>::UniformLocation;
 /// and handling events on both desktop and web.
 /// Anything it contains is specialized to the correct type via cfg flags
 /// at compile time, rather than trying to use generics or such.
-#[derive(Debug)]
 pub struct GlContext {
     /// The OpenGL context.
     pub gl: Rc<glow::Context>,
@@ -729,11 +730,36 @@ impl QuadDrawCall {
     }
 }
 
+/// Trait for a draw call...
+pub trait DrawCall {
+    /// Add a new instance to the quad data.
+    /// Instances are cached between `draw()` invocations.
+    fn add(&mut self, quad: QuadData);
+
+    /// Empty all instances out of the instance buffer.
+    fn clear(&mut self);
+    /// fdjsal
+    unsafe fn draw(&mut self, gl: &Context);
+}
+
+impl DrawCall for QuadDrawCall {
+    fn add(&mut self, quad: QuadData) {
+        self.add(quad);
+    }
+
+    fn clear(&mut self) {
+        self.clear();
+    }
+
+    unsafe fn draw(&mut self, gl: &Context) {
+        self.draw(gl);
+    }
+}
+
 /// A pipeline for drawing quads.
-#[derive(Debug)]
 pub struct QuadPipeline {
     /// The draw calls in the pipeline.
-    pub drawcalls: Vec<QuadDrawCall>,
+    pub drawcalls: Vec<Box<dyn DrawCall>>,
     shader: Shader,
     /// The projection the pipeline will draw with.
     pub projection: Mat4,
@@ -768,6 +794,48 @@ impl QuadPipeline {
         for dc in self.drawcalls.iter_mut() {
             dc.draw(gl);
         }
+    }
+}
+
+/// hnyrn
+pub trait Pipeline {
+    /// foo
+    unsafe fn draw(&mut self, gl: &Context);
+    /// foo
+    fn new_drawcall(
+        &mut self,
+        ctx: &mut GlContext,
+        texture: Texture,
+        sampler: SamplerSpec,
+    ) -> &mut dyn DrawCall;
+    ///  Returns iterator of drawcalls
+    fn drawcalls(&self) -> &[Box<dyn DrawCall>];
+    ///  Returns iterator of drawcalls
+    fn drawcalls_mut(&mut self) -> &mut [Box<dyn DrawCall>];
+}
+
+impl Pipeline for QuadPipeline {
+    /// foo
+    unsafe fn draw(&mut self, gl: &Context) {
+        self.draw(gl);
+    }
+    /// foo
+    fn new_drawcall(
+        &mut self,
+        ctx: &mut GlContext,
+        texture: Texture,
+        sampler: SamplerSpec,
+    ) -> &mut dyn DrawCall {
+        let x = QuadDrawCall::new(ctx, texture, sampler, self);
+        self.drawcalls.push(Box::new(x));
+        &mut **self.drawcalls.last_mut().unwrap()
+    }
+
+    fn drawcalls(&self) -> &[Box<dyn DrawCall>] {
+        self.drawcalls.as_slice()
+    }
+    fn drawcalls_mut(&mut self) -> &mut [Box<dyn DrawCall>] {
+        self.drawcalls.as_mut_slice()
     }
 }
 
@@ -901,13 +969,12 @@ impl RenderTarget {
 /// Currently, no input framebuffers or such.
 /// We're not actually intending to reproduce Rendy's Graph type here.
 /// This may eventually feed into a bounce buffer or such though.
-#[derive(Debug)]
 pub struct RenderPass {
     target: RenderTarget,
     clear_color: (f32, f32, f32, f32),
     viewport: (i32, i32, i32, i32),
     /// The pipelines to draw in the render pass.
-    pub pipelines: Vec<QuadPipeline>,
+    pub pipelines: Vec<Box<dyn Pipeline>>,
 }
 
 impl RenderPass {
