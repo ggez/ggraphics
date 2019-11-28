@@ -114,12 +114,12 @@ impl GlContext {
             gl.blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
             let gl = Rc::new(gl);
             let quad_shader =
-                ShaderHandle::new(gl.clone(), VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE);
+                ShaderHandle::new_raw(gl.clone(), VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE);
             let s = GlContext {
                 gl,
                 passes: vec![],
                 samplers: HashMap::new(),
-                quad_shader: Rc::new(quad_shader),
+                quad_shader: quad_shader.into_shared(),
             };
             s.register_debug_callback();
 
@@ -337,7 +337,7 @@ impl Drop for ShaderHandle {
 pub type Shader = Rc<ShaderHandle>;
 
 impl ShaderHandle {
-    fn new(gl: Rc<glow::Context>, vertex_src: &str, fragment_src: &str) -> ShaderHandle {
+    fn new_raw(gl: Rc<glow::Context>, vertex_src: &str, fragment_src: &str) -> ShaderHandle {
         let shader_sources = [
             (glow::VERTEX_SHADER, vertex_src),
             (glow::FRAGMENT_SHADER, fragment_src),
@@ -375,6 +375,16 @@ impl ShaderHandle {
             // glBindFragDataLocation(shaderProgram, 0, "outColor");
             ShaderHandle { ctx: gl, program }
         }
+    }
+
+    /// Create new shader
+    pub fn new(ctx: &GlContext, vertex_src: &str, fragment_src: &str) -> ShaderHandle {
+        Self::new_raw(ctx.gl.clone(), vertex_src, fragment_src)
+    }
+
+    /// Consume this shader and return a clone-able one
+    pub fn into_shared(self) -> Shader {
+        Rc::new(self)
     }
 }
 
