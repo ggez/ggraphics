@@ -49,7 +49,8 @@ impl GameState {
             };
             // Render that texture to the screen
             let mut screen_pass = RenderPass::new_screen(&mut ctx, 800, 600, (0.6, 0.6, 0.6, 1.0));
-            let shader = GlContext::default_shader(&ctx);
+            // let shader = GlContext::default_shader(&ctx);
+            let shader = ShaderHandle::new(&ctx, include_str!("../src/data/quad_wireframe.vert.glsl"), include_str!("../src/data/quad_wireframe.frag.glsl")).into_shared();
             let mut pipeline = QuadPipeline::new(&ctx, shader);
             /*
             let drawcall = QuadDrawCall::new(
@@ -187,7 +188,6 @@ fn mainloop(
                     return;
                 }
                 Event::EventsCleared => {
-                    println!("Events cleared");
                     let now = Instant::now();
                     let dt = now - last_frame;
                     if dt >= target_dt {
