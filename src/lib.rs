@@ -760,9 +760,9 @@ impl DrawCall for QuadDrawCall {
 pub struct QuadPipeline {
     /// The draw calls in the pipeline.
     pub drawcalls: Vec<QuadDrawCall>,
-    shader: Shader,
     /// The projection the pipeline will draw with.
     pub projection: Mat4,
+    shader: Shader,
     projection_location: GlUniformLocation,
 }
 
@@ -810,28 +810,32 @@ pub trait Pipeline {
     ) -> &mut dyn DrawCall;
     /// this seems the way to do it...
     fn get(&self, idx: usize) -> &dyn DrawCall;
+    /// Get mut
+    fn get_mut(&mut self, idx: usize) -> &mut dyn DrawCall;
     /// clear all draw calls
     fn clear(&mut self);
-    ///  Returns iterator of drawcalls
-    fn drawcalls(&self) -> PipelineIterator;
-    // ///  Returns iterator of drawcalls
-    //fn drawcalls_mut(&mut self) -> Vec<&mut dyn DrawCall>;
+    /////  Returns iterator of drawcalls.  The lifetimes are a PITA.
+    //fn drawcalls<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn DrawCall>>;
 }
 
-/// TODO: Docs
-pub struct PipelineIterator<'a>(std::slice::Iter<'a, QuadDrawCall>);
+/// aaaaa
+pub struct PipelineIter<'a> {
+    i: std::slice::Iter<'a, QuadDrawCall>,
+}
 
-impl<'a> PipelineIterator<'a> {
+impl<'a> PipelineIter<'a> {
     /// TODO: Docs
     pub fn new(p: &'a QuadPipeline) -> Self {
-        Self(p.drawcalls.iter())
+        Self {
+            i: p.drawcalls.iter(),
+        }
     }
 }
 
-impl<'a> Iterator for PipelineIterator<'a> {
-    type Item = &'a QuadDrawCall;
-    fn next(&mut self) -> Option<&'a QuadDrawCall> {
-        self.0.next()
+impl<'a> Iterator for PipelineIter<'a> {
+    type Item = &'a dyn DrawCall;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.i.next().map(|x| x as _)
     }
 }
 
@@ -858,15 +862,14 @@ impl Pipeline for QuadPipeline {
     fn get(&self, idx: usize) -> &dyn DrawCall {
         &self.drawcalls[idx]
     }
-    fn drawcalls(&self) -> PipelineIterator {
-        //Box<dyn Iterator<Item = dyn DrawCall>> {
-        //Box::new(self.drawcalls.iter().map(|x| x as &dyn DrawCall))
-        PipelineIterator::new(self)
+    fn get_mut(&mut self, idx: usize) -> &mut dyn DrawCall {
+        &mut self.drawcalls[idx]
     }
+
     /*
-    fn drawcalls_mut(&mut self) -> Vec<&mut dyn DrawCall> {
-        //self.drawcalls.as_mut_slice()
-        self.drawcalls.iter_mut().map(|x| x as _).collect()
+    fn drawcalls<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn DrawCall>> {
+        let i = PipelineIter::new(self);
+        Box::new(i)
     }
     */
 }
@@ -1040,6 +1043,11 @@ impl RenderPass {
             viewport: (0, 0, width as i32, height as i32),
             clear_color,
         }
+    }
+
+    /// Add a new pipeline to the renderpass
+    pub fn add_pipeline(&mut self, pipeline: impl Pipeline + 'static) {
+        self.pipelines.push(Box::new(pipeline))
     }
 
     unsafe fn draw(&mut self, gl: &Context) {
