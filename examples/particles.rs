@@ -49,8 +49,7 @@ impl GameState {
             };
             // Render that texture to the screen
             let mut screen_pass = RenderPass::new_screen(&mut ctx, 800, 600, (0.6, 0.6, 0.6, 1.0));
-            // let shader = GlContext::default_shader(&ctx);
-            let shader = ShaderHandle::new(&ctx, include_str!("../src/data/quad_wireframe.vert.glsl"), include_str!("../src/data/quad_wireframe.frag.glsl")).into_shared();
+            let shader = GlContext::default_shader(&ctx);
             let mut pipeline = QuadPipeline::new(&ctx, shader);
             /*
             let drawcall = QuadDrawCall::new(
@@ -108,13 +107,14 @@ impl GameState {
             // frame rate, we'd want to do this on draw rather than update.
             let pass = self.ctx.passes.last_mut().unwrap();
             for pipeline in pass.pipelines.iter_mut() {
-                for drawcall in pipeline.drawcalls.iter_mut() {
-                    // Copy all our particles into the draw call
-                    drawcall.clear();
-                    for particle in &self.particles {
-                        let q = particle.into_quaddata();
-                        drawcall.add(q);
-                    }
+                //for drawcall in pipeline.drawcalls.iter_mut() {
+                let drawcall = pipeline.get_mut(0);
+                // Copy all our particles into the draw call
+                drawcall.clear();
+                for particle in &self.particles {
+                    let q = particle.into_quaddata();
+                    drawcall.add(q);
+                    //}
                 }
             }
         }
