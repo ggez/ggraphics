@@ -107,14 +107,13 @@ impl GameState {
             // frame rate, we'd want to do this on draw rather than update.
             let pass = self.ctx.passes.last_mut().unwrap();
             for pipeline in pass.pipelines.iter_mut() {
-                //for drawcall in pipeline.drawcalls.iter_mut() {
-                let drawcall = pipeline.get_mut(0);
-                // Copy all our particles into the draw call
-                drawcall.clear();
-                for particle in &self.particles {
-                    let q = particle.into_quaddata();
-                    drawcall.add(q);
-                    //}
+                for drawcall in pipeline.drawcalls_mut() {
+                    // Copy all our particles into the draw call
+                    drawcall.clear();
+                    for particle in &self.particles {
+                        let q = particle.into_quaddata();
+                        drawcall.add(q);
+                    }
                 }
             }
         }

@@ -824,8 +824,10 @@ pub trait Pipeline {
     fn get_mut(&mut self, idx: usize) -> &mut dyn DrawCall;
     /// clear all draw calls
     fn clear(&mut self);
-    /////  Returns iterator of drawcalls.  The lifetimes are a PITA.
-    //fn drawcalls<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn DrawCall>>;
+    ///  Returns iterator of drawcalls.  The lifetimes are a PITA.
+    fn drawcalls<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn DrawCall> + 'a>;
+    ///  Returns iterator of mutable drawcalls.  The lifetimes are a PITA.
+    fn drawcalls_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = &'a mut dyn DrawCall> + 'a>;
 }
 
 /// aaaaa
@@ -844,6 +846,27 @@ impl<'a> PipelineIter<'a> {
 
 impl<'a> Iterator for PipelineIter<'a> {
     type Item = &'a dyn DrawCall;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.i.next().map(|x| x as _)
+    }
+}
+
+/// Sigh
+pub struct PipelineIterMut<'a> {
+    i: std::slice::IterMut<'a, QuadDrawCall>,
+}
+
+impl<'a> PipelineIterMut<'a> {
+    /// TODO: Docs
+    pub fn new(p: &'a mut QuadPipeline) -> Self {
+        Self {
+            i: p.drawcalls.iter_mut(),
+        }
+    }
+}
+
+impl<'a> Iterator for PipelineIterMut<'a> {
+    type Item = &'a mut dyn DrawCall;
     fn next(&mut self) -> Option<Self::Item> {
         self.i.next().map(|x| x as _)
     }
@@ -876,12 +899,15 @@ impl Pipeline for QuadPipeline {
         &mut self.drawcalls[idx]
     }
 
-    /*
-    fn drawcalls<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn DrawCall>> {
+    fn drawcalls<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn DrawCall> + 'a> {
         let i = PipelineIter::new(self);
         Box::new(i)
     }
-    */
+
+    fn drawcalls_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = &'a mut dyn DrawCall> + 'a> {
+        let i = PipelineIterMut::new(self);
+        Box::new(i)
+    }
 }
 
 /// A render target for drawing to a texture.
