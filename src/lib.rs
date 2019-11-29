@@ -759,7 +759,7 @@ impl DrawCall for QuadDrawCall {
 /// A pipeline for drawing quads.
 pub struct QuadPipeline {
     /// The draw calls in the pipeline.
-    pub drawcalls: Vec<Box<dyn DrawCall>>,
+    pub drawcalls: Vec<QuadDrawCall>,
     shader: Shader,
     /// The projection the pipeline will draw with.
     pub projection: Mat4,
@@ -809,9 +809,9 @@ pub trait Pipeline {
         sampler: SamplerSpec,
     ) -> &mut dyn DrawCall;
     ///  Returns iterator of drawcalls
-    fn drawcalls(&self) -> &[Box<dyn DrawCall>];
+    fn drawcalls(&self) -> Vec<&dyn DrawCall>;
     ///  Returns iterator of drawcalls
-    fn drawcalls_mut(&mut self) -> &mut [Box<dyn DrawCall>];
+    fn drawcalls_mut(&mut self) -> Vec<&mut dyn DrawCall>;
 }
 
 impl Pipeline for QuadPipeline {
@@ -827,15 +827,16 @@ impl Pipeline for QuadPipeline {
         sampler: SamplerSpec,
     ) -> &mut dyn DrawCall {
         let x = QuadDrawCall::new(ctx, texture, sampler, self);
-        self.drawcalls.push(Box::new(x));
-        &mut **self.drawcalls.last_mut().unwrap()
+        self.drawcalls.push(x);
+        &mut *self.drawcalls.last_mut().unwrap()
     }
 
-    fn drawcalls(&self) -> &[Box<dyn DrawCall>] {
-        self.drawcalls.as_slice()
+    fn drawcalls(&self) -> Vec<&dyn DrawCall> {
+        self.drawcalls.iter().map(|x| x as _).collect()
     }
-    fn drawcalls_mut(&mut self) -> &mut [Box<dyn DrawCall>] {
-        self.drawcalls.as_mut_slice()
+    fn drawcalls_mut(&mut self) -> Vec<&mut dyn DrawCall> {
+        //self.drawcalls.as_mut_slice()
+        self.drawcalls.iter_mut().map(|x| x as _).collect()
     }
 }
 
