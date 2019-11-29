@@ -808,10 +808,31 @@ pub trait Pipeline {
         texture: Texture,
         sampler: SamplerSpec,
     ) -> &mut dyn DrawCall;
+    /// this seems the way to do it...
+    fn get(&self, idx: usize) -> &dyn DrawCall;
+    /// clear all draw calls
+    fn clear(&mut self);
     ///  Returns iterator of drawcalls
-    fn drawcalls(&self) -> Vec<&dyn DrawCall>;
-    ///  Returns iterator of drawcalls
-    fn drawcalls_mut(&mut self) -> Vec<&mut dyn DrawCall>;
+    fn drawcalls(&self) -> PipelineIterator;
+    // ///  Returns iterator of drawcalls
+    //fn drawcalls_mut(&mut self) -> Vec<&mut dyn DrawCall>;
+}
+
+/// TODO: Docs
+pub struct PipelineIterator<'a>(std::slice::Iter<'a, QuadDrawCall>);
+
+impl<'a> PipelineIterator<'a> {
+    /// TODO: Docs
+    pub fn new(p: &'a QuadPipeline) -> Self {
+        Self(p.drawcalls.iter())
+    }
+}
+
+impl<'a> Iterator for PipelineIterator<'a> {
+    type Item = &'a QuadDrawCall;
+    fn next(&mut self) -> Option<&'a QuadDrawCall> {
+        self.0.next()
+    }
 }
 
 impl Pipeline for QuadPipeline {
@@ -831,13 +852,23 @@ impl Pipeline for QuadPipeline {
         &mut *self.drawcalls.last_mut().unwrap()
     }
 
-    fn drawcalls(&self) -> Vec<&dyn DrawCall> {
-        self.drawcalls.iter().map(|x| x as _).collect()
+    fn clear(&mut self) {
+        self.drawcalls.clear()
     }
+    fn get(&self, idx: usize) -> &dyn DrawCall {
+        &self.drawcalls[idx]
+    }
+    fn drawcalls(&self) -> PipelineIterator {
+        //Box<dyn Iterator<Item = dyn DrawCall>> {
+        //Box::new(self.drawcalls.iter().map(|x| x as &dyn DrawCall))
+        PipelineIterator::new(self)
+    }
+    /*
     fn drawcalls_mut(&mut self) -> Vec<&mut dyn DrawCall> {
         //self.drawcalls.as_mut_slice()
         self.drawcalls.iter_mut().map(|x| x as _).collect()
     }
+    */
 }
 
 /// A render target for drawing to a texture.
