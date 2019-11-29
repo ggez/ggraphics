@@ -100,11 +100,6 @@ const VERTEX_SHADER_SOURCE: &str = include_str!("data/quad.vert.glsl");
 const FRAGMENT_SHADER_SOURCE: &str = include_str!("data/quad.frag.glsl");
 
 impl GlContext {
-    /// Get a copy of the default quad shader.
-    pub fn default_shader(&self) -> Shader {
-        self.quad_shader.clone()
-    }
-
     /// Create a new `GlContext` from the given `glow::Context`.  Does
     /// basic setup and state setting.
     pub fn new(gl: glow::Context) -> Self {
@@ -125,6 +120,11 @@ impl GlContext {
 
             s
         }
+    }
+
+    /// Get a copy of the default quad shader.
+    pub fn default_shader(&self) -> Shader {
+        self.quad_shader.clone()
     }
 
     /// Log OpenGL errors as possible.

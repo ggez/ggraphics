@@ -46,12 +46,7 @@ void main() {
     vec2 dest_point = model_dst_rect.xy;
     vert = (verts[gl_VertexID % 6] + offset_inverse) * scale * rotation
         + model_offset + dest_point + vertex_dummy;
-    /*
-    vert = verts[gl_VertexID % 6]
-        * model_dst_rect.zw + model_dst_rect.xy
-        * rotation + vertex_dummy + model_offset;
-        */
-    if
+        
     // TODO: Double-check these UV's are correct
     tex_coord = uvs[gl_VertexID] * model_src_rect.zw + model_src_rect.xy;
     frag_color = model_color;
