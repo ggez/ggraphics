@@ -13,12 +13,9 @@
 //! <https://github.com/FNA-XNA/FNA/blob/76554b7ca3d7aa33229c12c6ab5bf3dbdb114d59/src/FNAPlatform/OpenGLDevice.cs#L10-L39> for more info
 
 // Next up:
-// Mesh pipelines?  Diff shaders?  Try out termhn's wireframe shader with barycentric coords?
+// Impl mesh pipelines
+// Try out termhn's wireframe shader with barycentric coords
 // audit unsafes, figure out what can be safe,
-// Ponder how to improve the API.
-//  * Build DrawCall's from Pipelines, and Pipelines from Passes?
-//  * Mesh drawcall's and passes?  Common traits for them?
-//  * Just start tossing it into ggez and see what happens?
 
 #![deny(missing_docs)]
 //#![deny(missing_debug_implementations)]
@@ -753,14 +750,17 @@ pub trait DrawCall {
 }
 
 impl DrawCall for QuadDrawCall {
+    /// TODO: Refactor
     fn add(&mut self, quad: QuadData) {
         self.add(quad);
     }
 
+    /// TODO: Refactor
     fn clear(&mut self) {
         self.clear();
     }
 
+    /// TODO: Refactor
     unsafe fn draw(&mut self, gl: &Context) {
         self.draw(gl);
     }
@@ -807,6 +807,7 @@ impl QuadPipeline {
     }
 }
 
+/// TODO: Docs
 /// hnyrn
 pub trait Pipeline {
     /// foo
@@ -831,6 +832,7 @@ pub trait Pipeline {
 }
 
 /// aaaaa
+/// TODO: Docs
 pub struct PipelineIter<'a> {
     i: std::slice::Iter<'a, QuadDrawCall>,
 }
@@ -852,6 +854,7 @@ impl<'a> Iterator for PipelineIter<'a> {
 }
 
 /// Sigh
+/// TODO: Docs
 pub struct PipelineIterMut<'a> {
     i: std::slice::IterMut<'a, QuadDrawCall>,
 }
@@ -874,6 +877,7 @@ impl<'a> Iterator for PipelineIterMut<'a> {
 
 impl Pipeline for QuadPipeline {
     /// foo
+    /// TODO: Docs
     unsafe fn draw(&mut self, gl: &Context) {
         self.draw(gl);
     }

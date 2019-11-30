@@ -51,16 +51,7 @@ impl GameState {
             let mut screen_pass = RenderPass::new_screen(&mut ctx, 800, 600, (0.6, 0.6, 0.6, 1.0));
             let shader = GlContext::default_shader(&ctx);
             let mut pipeline = QuadPipeline::new(&ctx, shader);
-            /*
-            let drawcall = QuadDrawCall::new(
-                &mut ctx,
-                particle_texture,
-                SamplerSpec::default(),
-                &pipeline,
-            );
-            */
             pipeline.new_drawcall(&mut ctx, particle_texture, SamplerSpec::default());
-            //pipeline.drawcalls.push(drawcall);
             screen_pass.add_pipeline(pipeline);
             ctx.passes.push(screen_pass);
         }
@@ -124,6 +115,7 @@ impl GameState {
 trait Window {
     fn request_redraw(&self);
     fn swap_buffers(&self);
+    // TODO: Resize
 }
 
 /// Used for desktop
