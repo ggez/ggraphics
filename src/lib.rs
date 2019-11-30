@@ -14,6 +14,7 @@
 
 // Next up:
 // Impl mesh pipelines
+// Blend modes!
 // Try out termhn's wireframe shader with barycentric coords
 // audit unsafes, figure out what can be safe,
 
@@ -500,6 +501,10 @@ impl WrapMode {
     }
 }
 
+/// TODO
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BlendMode {}
+
 /// A description of a sampler.  We cache the actual
 /// samplers as needed in the GlContext.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -766,6 +771,231 @@ impl DrawCall for QuadDrawCall {
     }
 }
 
+/// TODO: Make this actually a mesh
+#[derive(Debug)]
+pub struct MeshDrawCall {
+    ctx: Rc<glow::Context>,
+    texture: Texture,
+    sampler: GlSampler,
+    /// The instances that will be drawn.
+    pub instances: Vec<QuadData>,
+    vbo: GlBuffer,
+    vao: GlVertexArray,
+    instance_vbo: GlBuffer,
+    texture_location: GlUniformLocation,
+    /// Whether or not the instances have changed
+    /// compared to what the VBO contains, so we can
+    /// only upload to the VBO on changes
+    pub dirty: bool,
+}
+impl Drop for MeshDrawCall {
+    fn drop(&mut self) {
+        unsafe {
+            self.ctx.delete_vertex_array(self.vao);
+            self.ctx.delete_buffer(self.vbo);
+            self.ctx.delete_buffer(self.instance_vbo);
+            // Don't need to drop the sampler, it's owned by
+            // the `GlContext`.
+            // And the texture takes care of itself.
+        }
+    }
+}
+
+impl MeshDrawCall {
+    unsafe fn set_vertex_pointers(ctx: &GlContext, shader: &ShaderHandle) {
+        let gl = &*ctx.gl;
+        let layout = QuadData::layout();
+        for (name, offset, size) in layout {
+            info!("Layout: {} offset, {} size", offset, size);
+            let element_size = mem::size_of::<f32>();
+            let attrib_location = gl.get_attrib_location(shader.program, name).unwrap();
+            gl.vertex_attrib_pointer_f32(
+                attrib_location,
+                (size / element_size) as i32,
+                glow::FLOAT,
+                false,
+                mem::size_of::<QuadData>() as i32,
+                offset as i32,
+            );
+            gl.vertex_attrib_divisor(attrib_location, 1);
+            gl.enable_vertex_attrib_array(attrib_location);
+        }
+    }
+
+    /// New empty `MeshDrawCall` using the given pipeline.
+    pub fn new(
+        ctx: &mut GlContext,
+        texture: Texture,
+        sampler: SamplerSpec,
+        pipeline: &MeshPipeline,
+    ) -> Self {
+        let sampler = ctx.get_sampler(&sampler);
+        let gl = &*ctx.gl;
+        // TODO: Audit unsafe
+        unsafe {
+            let vao = gl.create_vertex_array().unwrap();
+            gl.bind_vertex_array(Some(vao));
+
+            // Okay, it looks like which VBO is bound IS part of the VAO data,
+            // and it is stored *when glVertexAttribPointer is called*.
+            // According to https://open.gl/drawing at least.
+            // And, that stuff I THINK is stored IN THE ATTRIBUTE INFO,
+            // in this case `offset_attrib`, and then THAT gets attached
+            // to the VAO by enable_vertex_attrib_array()
+            let vbo = gl.create_buffer().unwrap();
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
+
+            let dummy_attrib = gl
+                .get_attrib_location(pipeline.shader.program, "vertex_dummy")
+                .unwrap();
+            gl.vertex_attrib_pointer_f32(
+                dummy_attrib,
+                2,
+                glow::FLOAT,
+                false,
+                // We can just say the stride of this guy is 0, since
+                // we never actually use it (yet).  That lets us use a
+                // widdle bitty awway for this instead of having an
+                // unused empty value for every vertex of every instance.
+                0,
+                0,
+            );
+            gl.enable_vertex_attrib_array(dummy_attrib);
+
+            // We DO need a buffer of per-vertex attributes, WebGL gets snippy
+            // if we just give it per-instance attributes and say "yeah each
+            // vertex just has nothing attached to it".  Which is exactly what
+            // we want for quad drawing, alas.
+            //
+            // But we can make a buffer that just contains one vec2(0,0) for each vertex
+            // and give it that, and that seems just fine.
+            // And we only need enough vertices to draw one quad and never have to alter it.
+            // We could reuse the same buffer for all MeshDrawCall's, tbh, but that seems
+            // a bit overkill.
+            let empty_slice: &[u8] = &[0; mem::size_of::<f32>() * 2 * 6];
+            gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, empty_slice, glow::STREAM_DRAW);
+
+            // Now create another VBO containing per-instance data
+            let instance_vbo = gl.create_buffer().unwrap();
+            gl.bind_buffer(glow::ARRAY_BUFFER, Some(instance_vbo));
+            Self::set_vertex_pointers(ctx, &pipeline.shader);
+
+            // We can't define locations for uniforms, yet.
+            let texture_location = gl
+                .get_uniform_location(pipeline.shader.program, "tex")
+                .unwrap();
+
+            gl.bind_vertex_array(None);
+
+            Self {
+                ctx: ctx.gl.clone(),
+                vbo,
+                vao,
+                texture,
+                sampler,
+                instance_vbo,
+                texture_location,
+                instances: vec![],
+                dirty: true,
+            }
+        }
+    }
+
+    /// Add a new instance to the quad data.
+    /// Instances are cached between `draw()` invocations.
+    pub fn add(&mut self, quad: QuadData) {
+        self.dirty = true;
+        self.instances.push(quad);
+    }
+
+    /// Empty all instances out of the instance buffer.
+    pub fn clear(&mut self) {
+        self.dirty = true;
+        self.instances.clear();
+    }
+
+    /// Add a random quad.  Useful for testing.
+    pub fn add_random(&mut self, rand: &mut oorandom::Rand32) {
+        let x = rand.rand_float() * 2.0 - 1.0;
+        let y = rand.rand_float() * 2.0 - 1.0;
+        let r = rand.rand_float();
+        let g = rand.rand_float();
+        let b = rand.rand_float();
+        let a = 1.0;
+        let rot = rand.rand_float();
+        let quad = QuadData {
+            offset: [0.5, 0.5],
+            color: [r, g, b, a],
+            src_rect: [0.0, 0.0, 1.0, 1.0],
+            dst_rect: [x, y, x + 1.0, y + 1.0],
+            rotation: rot * std::f32::consts::PI * 2.0,
+        };
+        self.add(quad);
+    }
+
+    /// Upload the array of instances to our VBO
+    unsafe fn upload_instances(&mut self, gl: &Context) {
+        // TODO: audit unsafe
+        let bytes_slice: &[u8] = bytemuck::try_cast_slice(self.instances.as_slice()).unwrap();
+
+        // Fill instance buffer
+        gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.instance_vbo));
+        gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes_slice, glow::STREAM_DRAW);
+        gl.bind_buffer(glow::ARRAY_BUFFER, None);
+        self.dirty = false;
+    }
+
+    unsafe fn draw(&mut self, gl: &Context) {
+        if self.dirty {
+            self.upload_instances(gl);
+        }
+        // Bind VAO
+        let num_instances = self.instances.len();
+        let num_vertices = 6;
+        gl.bind_vertex_array(Some(self.vao));
+
+        // Bind texture
+        // TODO: is this active_texture() call necessary?
+        // Will be if we ever do multi-texturing, I suppose.
+        gl.active_texture(glow::TEXTURE0);
+        gl.bind_texture(glow::TEXTURE_2D, Some(self.texture.tex));
+        gl.uniform_1_i32(Some(self.texture_location), 0);
+
+        // bind sampler
+        // This is FUCKING WHACKO.  I set the active texture
+        // unit to glow::TEXTURE0 , which sets it to texture
+        // unit 0, then I bind the sampler to 0, which sets it
+        // to texture unit 0.  I think.  You have to dig into
+        // the ARB extension RFC to figure this out 'cause it isn't
+        // documented anywhere else I can find it.
+        // Thanks, Khronos.
+        gl.bind_sampler(0, Some(self.sampler));
+        gl.draw_arrays_instanced(
+            glow::TRIANGLES,
+            0,
+            num_vertices as i32,
+            num_instances as i32,
+        );
+    }
+}
+
+impl DrawCall for MeshDrawCall {
+    /// TODO: Refactor
+    fn add(&mut self, quad: QuadData) {
+        self.add(quad);
+    }
+
+    /// TODO: Refactor
+    fn clear(&mut self) {
+        self.clear();
+    }
+
+    /// TODO: Refactor
+    unsafe fn draw(&mut self, gl: &Context) {
+        self.draw(gl);
+    }
+}
+
 /// A pipeline for drawing quads.
 pub struct QuadPipeline {
     /// The draw calls in the pipeline.
@@ -910,6 +1140,130 @@ impl Pipeline for QuadPipeline {
 
     fn drawcalls_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = &'a mut dyn DrawCall> + 'a> {
         let i = PipelineIterMut::new(self);
+        Box::new(i)
+    }
+}
+
+/// A pipeline for drawing quads.
+pub struct MeshPipeline {
+    /// The draw calls in the pipeline.
+    pub drawcalls: Vec<MeshDrawCall>,
+    /// The projection the pipeline will draw with.
+    pub projection: Mat4,
+    shader: Shader,
+    projection_location: GlUniformLocation,
+}
+
+impl MeshPipeline {
+    /// Create new pipeline with the given shader.
+    pub unsafe fn new(ctx: &GlContext, shader: Shader) -> Self {
+        let gl = &*ctx.gl;
+        //let projection = Mat4::identity();
+        let projection = ortho_mat(-1.0, 1.0, 1.0, -1.0, 1.0, -1.0);
+        let projection_location = gl
+            .get_uniform_location(shader.program, "projection")
+            .unwrap();
+        Self {
+            drawcalls: vec![],
+            shader,
+            projection,
+            projection_location,
+        }
+    }
+
+    /// Draw all the draw calls in the pipeline.
+    pub unsafe fn draw(&mut self, gl: &Context) {
+        gl.use_program(Some(self.shader.program));
+        gl.uniform_matrix_4_f32_slice(
+            Some(self.projection_location),
+            false,
+            &self.projection.to_cols_array(),
+        );
+        for dc in self.drawcalls.iter_mut() {
+            dc.draw(gl);
+        }
+    }
+}
+
+/// aaaaa
+/// TODO: Docs
+pub struct MeshPipelineIter<'a> {
+    i: std::slice::Iter<'a, MeshDrawCall>,
+}
+
+impl<'a> MeshPipelineIter<'a> {
+    /// TODO: Docs
+    pub fn new(p: &'a MeshPipeline) -> Self {
+        Self {
+            i: p.drawcalls.iter(),
+        }
+    }
+}
+
+impl<'a> Iterator for MeshPipelineIter<'a> {
+    type Item = &'a dyn DrawCall;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.i.next().map(|x| x as _)
+    }
+}
+
+/// Sigh
+/// TODO: Docs
+pub struct MeshPipelineIterMut<'a> {
+    i: std::slice::IterMut<'a, MeshDrawCall>,
+}
+
+impl<'a> MeshPipelineIterMut<'a> {
+    /// TODO: Docs
+    pub fn new(p: &'a mut MeshPipeline) -> Self {
+        Self {
+            i: p.drawcalls.iter_mut(),
+        }
+    }
+}
+
+impl<'a> Iterator for MeshPipelineIterMut<'a> {
+    type Item = &'a mut dyn DrawCall;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.i.next().map(|x| x as _)
+    }
+}
+
+impl Pipeline for MeshPipeline {
+    /// foo
+    /// TODO: Docs
+    unsafe fn draw(&mut self, gl: &Context) {
+        self.draw(gl);
+    }
+    /// foo
+    fn new_drawcall(
+        &mut self,
+        ctx: &mut GlContext,
+        texture: Texture,
+        sampler: SamplerSpec,
+    ) -> &mut dyn DrawCall {
+        let x = MeshDrawCall::new(ctx, texture, sampler, self);
+        self.drawcalls.push(x);
+        &mut *self.drawcalls.last_mut().unwrap()
+    }
+
+    fn clear(&mut self) {
+        self.drawcalls.clear()
+    }
+    fn get(&self, idx: usize) -> &dyn DrawCall {
+        &self.drawcalls[idx]
+    }
+    fn get_mut(&mut self, idx: usize) -> &mut dyn DrawCall {
+        &mut self.drawcalls[idx]
+    }
+
+    fn drawcalls<'a>(&'a self) -> Box<dyn Iterator<Item = &'a dyn DrawCall> + 'a> {
+        let i = MeshPipelineIter::new(self);
+        Box::new(i)
+    }
+
+    fn drawcalls_mut<'a>(&'a mut self) -> Box<dyn Iterator<Item = &'a mut dyn DrawCall> + 'a> {
+        let i = MeshPipelineIterMut::new(self);
         Box::new(i)
     }
 }
