@@ -12,16 +12,9 @@ license = "MIT"
 opt-level = "s"
 
 [dependencies]
-image = {version = "0.22", default-features=false, features=["jpeg", "png_codec", "pnm", "tiff", "webp", "bmp", "hdr", "dxt"] }
 log = "0.4"
 bytemuck = "1"
-#euclid = "0.20"
-#vek = "0.9"
 glam = "0.8"
-
-oorandom = "11"
-pretty_env_logger = "0.3"
-instant = "0.1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 glow = {version = "0.3.0-alpha4", default-features=false}
@@ -40,3 +33,9 @@ web_sys = { version = "0.3", package = "web-sys", features=["console"] }
 wasm-bindgen = { version = "0.2" }
 console_error_panic_hook = "0.1"
 winit = {version = "0.20.0-alpha4", features=["web-sys"]}
+
+[dev-dependencies]
+image = {version = "0.22", default-features=false, features=["jpeg", "png_codec", "pnm", "tiff", "webp", "bmp", "hdr", "dxt"] }
+pretty_env_logger = "0.3"
+instant = "0.1"
+oorandom = "11"

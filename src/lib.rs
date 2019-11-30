@@ -29,6 +29,9 @@ use std::convert::TryFrom;
 use std::mem;
 use std::rc::Rc;
 
+/// Re-export
+pub use glow;
+
 use bytemuck;
 use glam::Mat4;
 use glow::*;
@@ -677,25 +680,6 @@ impl QuadDrawCall {
         self.instances.clear();
     }
 
-    /// Add a random quad.  Useful for testing.
-    pub fn add_random(&mut self, rand: &mut oorandom::Rand32) {
-        let x = rand.rand_float() * 2.0 - 1.0;
-        let y = rand.rand_float() * 2.0 - 1.0;
-        let r = rand.rand_float();
-        let g = rand.rand_float();
-        let b = rand.rand_float();
-        let a = 1.0;
-        let rot = rand.rand_float();
-        let quad = QuadData {
-            offset: [0.5, 0.5],
-            color: [r, g, b, a],
-            src_rect: [0.0, 0.0, 1.0, 1.0],
-            dst_rect: [x, y, x + 1.0, y + 1.0],
-            rotation: rot * std::f32::consts::PI * 2.0,
-        };
-        self.add(quad);
-    }
-
     /// Upload the array of instances to our VBO
     unsafe fn upload_instances(&mut self, gl: &Context) {
         // TODO: audit unsafe
@@ -912,25 +896,6 @@ impl MeshDrawCall {
     pub fn clear(&mut self) {
         self.dirty = true;
         self.instances.clear();
-    }
-
-    /// Add a random quad.  Useful for testing.
-    pub fn add_random(&mut self, rand: &mut oorandom::Rand32) {
-        let x = rand.rand_float() * 2.0 - 1.0;
-        let y = rand.rand_float() * 2.0 - 1.0;
-        let r = rand.rand_float();
-        let g = rand.rand_float();
-        let b = rand.rand_float();
-        let a = 1.0;
-        let rot = rand.rand_float();
-        let quad = QuadData {
-            offset: [0.5, 0.5],
-            color: [r, g, b, a],
-            src_rect: [0.0, 0.0, 1.0, 1.0],
-            dst_rect: [x, y, x + 1.0, y + 1.0],
-            rotation: rot * std::f32::consts::PI * 2.0,
-        };
-        self.add(quad);
     }
 
     /// Upload the array of instances to our VBO
