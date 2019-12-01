@@ -417,6 +417,7 @@ unsafe impl bytemuck::Pod for QuadData {}
 
 impl QuadData {
     /// Returns an empty `QuadData` with default values.
+    /// TODO: This should impl Default
     pub const fn empty() -> Self {
         QuadData {
             offset: [0.0, 0.0],
@@ -1414,8 +1415,15 @@ impl RenderPass {
         let (r, g, b, a) = self.clear_color;
         let (x, y, w, h) = self.viewport;
         // TODO: Does this need to be set every time, or does it stick to the target binding?
+        // I THINK with different render passes 
         gl.viewport(x, y, w, h);
         gl.clear_color(r, g, b, a);
+        // TODO: Do we want to actually do this each time, or 
+        // do we want the user to call it explicitly?
+        // Maybe the clear_color should be an option?
+        // PHC sez:
+        // If you're filling all pixels with your rendering, a clear isn't necessary
+        // And in fact has a measurable performance impact, though it probably doesn't matter for 2D
         gl.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
         for pipeline in self.pipelines.iter_mut() {
             pipeline.draw(gl);
